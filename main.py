@@ -3,7 +3,10 @@ from ortools.sat.python import cp_model
 OBJ1_TOLERANCE = 0 # relax as needed so the next section has more leeway and doesn't become infeasible
 OBJ2_TOLERANCE = 0
 
+COUNT_SOLUTIONS = True
+
 def get_blockouts(num_doctors, num_days):
+
     blockout_grid = [
         [1, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, ], 
         [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, ], 
@@ -56,6 +59,18 @@ def get_weekends(num_days):
         else:
             weekends.append(0)
     return weekends
+
+class SolutionCounter(cp_model.CpSolverSolutionCallback):
+    """Counts the number of solutions found"""
+    def __init__(self):
+        cp_model.CpSolverSolutionCallback.__init__(self)
+        self.__solution_count = 0
+
+    def on_solution_callback(self):
+        self.__solution_count += 1
+
+    def solution_count(self):
+        return self.__solution_count
 
 def main():
     # 0a. inputs
@@ -154,6 +169,19 @@ def main():
         if i != len(objectives) - 1:
             model_copy.add(objective <= optimal_obj + obj_tolerance)
 
+        # get amt of remaining ideal solutions, for debugging
+        if COUNT_SOLUTIONS:
+            counting_model = model_copy.clone()
+            solver = cp_model.CpSolver()
+            solution_counter = SolutionCounter()
+            solver.parameters.enumerate_all_solutions = True
+            solver.parameters.log_search_progress = True
+            solver.parameters.max_time_in_seconds = 20.0
+
+            status = solver.Solve(counting_model, solution_counter)
+            print(f"Number of optimal solutions currently: {solution_counter.solution_count()}")
+
+
     #5. Output
     print("5. outputting")
     shifts_per_person = [solver.Value(call_count[dr]) for dr in range(num_doctors)]
@@ -166,6 +194,7 @@ def main():
         for day in range(num_days):
             call_schedule[(dr, day)] = solver.Value(calls[(dr, day)])
 
+    print()
     for dr in range(num_doctors):
         for day in range(num_days):
             if call_schedule[(dr, day)] == 1 and blockouts[(dr, day)] == 0:
@@ -177,6 +206,8 @@ def main():
             elif call_schedule[(dr, day)] == 0 and blockouts[(dr, day)] == 0:
                 print("0", end=",")
         print()
+    
+    # 6. Find the number of optimal solutions
 
 if __name__=="__main__":
     main()
