@@ -1,0 +1,10 @@
+Parameter,Value
+start_date,01/10/2026
+end_date,31/10/2026
+min_call_interval,2
+max_teams_per_week,1
+max_solve_time,5
+al_call_buffer_before,1
+al_call_buffer_after,0
+blockout_call_buffer_before,1
+blockout_call_buffer_after,0

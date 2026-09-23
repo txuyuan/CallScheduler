@@ -49,9 +49,9 @@ class Roster:
         }
 
         self.persons = persons or []
-        self.team = team or {}
+        self.team = team or {}  # User locks for teams: {person: {date_str: team_name}}
         self.call_requirements = call_requirements or {}
-        self.calls = calls or {}
+        self.calls = calls or {}  # User locks for calls: {person: {date_str: 0 or 1}}
         self.leaves_blockouts = leaves_blockouts or {}
         self.leave_buffers = leave_buffers or [1, 0]
         self.blockout_buffers = blockout_buffers or [1, 0]
@@ -74,7 +74,7 @@ class Roster:
         self.team_vars = {}
         self.call_vars = {}
 
-        self.max_solve_time_seconds = max_solve_time_seconds or 0
+        self.max_solve_time_seconds = max_solve_time_seconds or 10  # Default fallback safeguard
 
         self.initialise()
 
@@ -141,9 +141,14 @@ class Roster:
             for idx, date_str in enumerate(self.dates):
                 self.call_vars[person][idx] = self.model.NewBoolVar(f"call_{person}_{idx}")
                 
-                # Constraint: Force call variable to 0 if the staff member is unavailable at night (ie leave/blockout + buffers)
+                # Constraint: Force call variable to 0 if the staff member is unavailable at night
                 if self.nighttime_unavailable.get(person, {}).get(idx, 0) == 1:
                     self.model.Add(self.call_vars[person][idx] == 0)
+
+                # Constraint: Apply user manual locks for calls if present
+                if person in self.calls and date_str in self.calls[person]:
+                    locked_call_val = int(self.calls[person][date_str])
+                    self.model.Add(self.call_vars[person][idx] == locked_call_val)
 
         # Constraint: Enforce a minimum interval spacing between assigned calls for each person.
         for person in self.persons:
@@ -168,11 +173,10 @@ class Roster:
     def _init_teams(self):
         self.teams_table = {p: {d: None for d in self.dates} for p in self.persons}
         
-        leave_idx = self.team_to_idx['leave']
-        pcc_idx = self.team_to_idx['ps_cover']
+        leave_idx = self.team_to_idx.get('leave', 0)
+        pcc_idx = self.team_to_idx.get('ps_cover', 0)
 
         for person in self.persons:
-            # Constraint: Initialize weekday team variables
             self.team_vars[person] = {}
             for idx, date_str in enumerate(self.dates):
                 d_obj = datetime.strptime(date_str, '%d/%m/%Y')
@@ -183,11 +187,18 @@ class Roster:
                     0, len(self.team_options) - 1, f"team_{person}_{idx}"
                 )
 
-                # Constraint: lock in pre-booked leaves
+                # Constraint: lock in pre-booked leaves automatically
                 if self.daytime_unavailable.get(person, {}).get(idx, 0) == 1:                   
                     self.model.Add(self.team_vars[person][idx] == leave_idx)
                 else:
                     self.model.Add(self.team_vars[person][idx] != leave_idx)
+
+                # Constraint: Apply user manual locks for teams/status if present
+                if person in self.team and date_str in self.team[person]:
+                    locked_team_name = str(self.team[person][date_str]).replace(" (auto)", "").strip()
+                    if locked_team_name in self.team_to_idx:
+                        locked_idx = self.team_to_idx[locked_team_name]
+                        self.model.Add(self.team_vars[person][idx] == locked_idx)
 
         # Constraint: Enforce minimum required staffing headcounts for each team (for weekdays)
         if self.min_team_requirements:
@@ -262,13 +273,11 @@ class Roster:
                     self.model.Add(self.team_vars[person][idx] == pcc_idx).OnlyEnforceIf(is_pcc_day)
                     self.model.Add(self.team_vars[person][idx] != pcc_idx).OnlyEnforceIf(is_pcc_day.Not())
                     
-                    # previous day
                     prev_idx = idx - 1
                     if prev_idx >= 0 and prev_idx in self.call_vars.get(person, {}):
                         self.model.Add(self.call_vars[person][prev_idx] == 0).OnlyEnforceIf(is_pcc_day)
     
     def _build_objective(self):
-        # Objective: Spread out calls to minimize high concentrations within any 7-day rolling window (number of calls within 7-day rolling window * 2).
         spread_penalties = []
         for person in self.persons:
             for idx in range(len(self.dates) - 6):
@@ -300,10 +309,7 @@ class Roster:
         wd_disparity = self.model.NewIntVar(0, len(self.dates), "wd_disparity")
         we_disparity = self.model.NewIntVar(0, len(self.dates), "we_disparity")
         
-        # Objective: Minimize weekday call disparity between the busiest and freeest staff member (weekday call count gap * 5).
         self.model.Add(wd_disparity == max_wd - min_wd)
-        
-        # Objective: Minimize weekend call disparity between the busiest and freeest staff member (weekend call count gap * 5).
         self.model.Add(we_disparity == max_we - min_we)
 
         team_evenness_penalties = []
@@ -329,7 +335,6 @@ class Roster:
             self.model.AddMaxEquality(p_max_team, team_counts)
             self.model.AddMinEquality(p_min_team, team_counts)
             
-            # Objective: Optimise evenness in amount of time spent in each team (team count variance per person * 3).
             person_team_variance = self.model.NewIntVar(0, len(self.dates), f"team_var_{person}")
             self.model.Add(person_team_variance == p_max_team - p_min_team)
             team_evenness_penalties.append(person_team_variance)
@@ -370,10 +375,8 @@ class Roster:
                 else:
                     weight = max(1, 1000 // (priority_val ** 2))
 
-                # Objective: Penalize unmet daily team staffing shortfalls multiplied by dynamic priority weights (shortfall count * priority weight).
                 shortfall_penalties.append(shortfall * weight)
 
-        # Objective: Minimize the sum of all weighted penalty components into a single objective score.
         total_objective = (
             sum(spread_penalties) * 2 +
             wd_disparity * 5 +
