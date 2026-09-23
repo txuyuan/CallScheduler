@@ -1,15 +1,15 @@
 from datetime import datetime, timedelta
 from pathlib import Path
+import numpy as np
 import pandas as pd
 import streamlit as st
 from roster import Roster  # Import your Roster class
 
 st.set_page_config(page_title="Interactive Roster Solver", layout="wide")
 
-st.title("🧩Roster Editor with Human-in-the-Loop Locks")
+st.title("🧩 Roster Editor with Human-in-the-Loop Locks")
 st.markdown(
-    "You can manually lock values in every table, and the model with generate the rest"
-    "Data is automatically persisted to the `data/` folder."
+    "Values auto-save instantly as you edit. Unassigned and cleared cells are stored as `None`."
 )
 
 # --- Ensure Data Directory Exists ---
@@ -22,38 +22,26 @@ ROSTER_CSV = DATA_DIR / "roster_locks.csv"
 
 # --- Default Staff & Team Options ---
 staff_members = [
-    "Alpha",
-    "Bravo",
-    "Charlie",
-    "Delta",
-    "Echo",
-    "Foxtrot",
-    "Golf",
-    "Hotel",
-    "India",
-    "Juliet",
-    "Kilo",
+    "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot",
+    "Golf", "Hotel", "India", "Juliet", "Kilo",
 ]
 team_options = [
-    "team_subobs",
-    "team_ds",
-    "team_9ab",
-    "team_b1",
-    "team_bg",
-    "team_go",
-    "ps_cover",
-    "leave",
+    "team_subobs", "team_ds", "team_9ab", "team_b1",
+    "team_bg", "team_go", "ps_cover", "leave",
 ]
 
 # --- Load Configuration Variables ---
-if CONFIG_CSV.exists():
-  try:
-    df_config = pd.read_csv(CONFIG_CSV)
-    cfg_dict = dict(zip(df_config["Parameter"], df_config["Value"]))
-  except Exception:
-    cfg_dict = {}
-else:
-  cfg_dict = {}
+if "cfg_dict" not in st.session_state:
+  if CONFIG_CSV.exists():
+    try:
+      df_config = pd.read_csv(CONFIG_CSV)
+      st.session_state.cfg_dict = dict(zip(df_config["Parameter"], df_config["Value"]))
+    except Exception:
+      st.session_state.cfg_dict = {}
+  else:
+    st.session_state.cfg_dict = {}
+
+cfg_dict = st.session_state.cfg_dict
 
 default_start = cfg_dict.get("start_date", "01/10/2026")
 default_end = cfg_dict.get("end_date", "31/10/2026")
@@ -65,33 +53,37 @@ default_al_a = int(cfg_dict.get("al_call_buffer_after", 0))
 default_bl_b = int(cfg_dict.get("blockout_call_buffer_before", 1))
 default_bl_a = int(cfg_dict.get("blockout_call_buffer_after", 0))
 
-# --- 1. GLOBAL PARAMETERS UI LAYOUT ---
+# --- 1. GLOBAL PARAMETERS UI LAYOUT (Wrapped in a Form to Prevent Jitter) ---
 st.subheader("Global Parameters")
-col1, col2 = st.columns(2)
-with col1:
-  start_date_str = st.text_input("Start Date", str(default_start))
-with col2:
-  end_date_str = st.text_input("End Date", str(default_end))
 
-col1, col2 = st.columns(2)
-with col1:
-  min_call_interval = st.number_input("Min call interval", value=default_min_call, step=1)
-with col2:
-  max_teams_per_week = st.number_input("Max teams per week", value=default_max_teams, step=1)
+with st.form("config_form"):
+  col1, col2 = st.columns(2)
+  with col1:
+    start_date_str = st.text_input("Start Date", str(default_start))
+  with col2:
+    end_date_str = st.text_input("End Date", str(default_end))
 
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-  al_call_buffer_before = st.number_input("AL call buffer (before)", value=default_al_b, step=1)
-with col2:
-  al_call_buffer_after = st.number_input("al (after)", value=default_al_a, step=1)
-with col3:
-  blockout_call_buffer_before = st.number_input("Blockout call buffer (before)", value=default_bl_b, step=1)
-with col4:
-  blockout_call_buffer_after = st.number_input("bl (after)", value=default_bl_a, step=1)
+  col1, col2 = st.columns(2)
+  with col1:
+    min_call_interval = st.number_input("Min call interval", value=default_min_call, step=1)
+  with col2:
+    max_teams_per_week = st.number_input("Max teams per week", value=default_max_teams, step=1)
 
-max_solve_time = st.number_input("Max Runtime (seconds)", value=default_max_runtime, step=1, min_value=1)
+  col1, col2, col3, col4 = st.columns(4)
+  with col1:
+    al_call_buffer_before = st.number_input("AL call buffer (before)", value=default_al_b, step=1)
+  with col2:
+    al_call_buffer_after = st.number_input("AL call buffer (after)", value=default_al_a, step=1)
+  with col3:
+    blockout_call_buffer_before = st.number_input("Blockout call buffer (before)", value=default_bl_b, step=1)
+  with col4:
+    blockout_call_buffer_after = st.number_input("Blockout call buffer (after)", value=default_bl_a, step=1)
 
-# Save configuration back to CSV
+  max_solve_time = st.number_input("Max Runtime (seconds)", value=default_max_runtime, step=1, min_value=1)
+  
+  apply_config = st.form_submit_button("Apply Configuration & Dates", type="secondary")
+
+# Auto-save configuration on form submission or change
 config_data = {
     "Parameter": [
         "start_date", "end_date", "min_call_interval", "max_teams_per_week",
@@ -104,7 +96,14 @@ config_data = {
         blockout_call_buffer_before, blockout_call_buffer_after
     ]
 }
-pd.DataFrame(config_data).to_csv(CONFIG_CSV, index=False)
+df_new_config = pd.DataFrame(config_data)
+df_old_config = pd.DataFrame(
+    {"Parameter": list(cfg_dict.keys()), "Value": list(cfg_dict.values())}
+) if cfg_dict else pd.DataFrame()
+
+if apply_config or not df_new_config.equals(df_old_config):
+  df_new_config.to_csv(CONFIG_CSV, index=False)
+  st.session_state.cfg_dict = dict(zip(df_new_config["Parameter"], df_new_config["Value"]))
 
 # --- Generate Date List ---
 try:
@@ -122,7 +121,6 @@ st.markdown("---")
 
 # --- 2. TEAM QUOTAS & REQUIREMENTS TABLE ---
 st.subheader("Team Quotas & Requirements")
-st.caption("Define team requirements, sacrificability rankings, minimum teams, and per-date quotas/call requirements.")
 
 if "df_teams" not in st.session_state:
   if QUOTAS_CSV.exists():
@@ -167,28 +165,33 @@ if "df_teams" not in st.session_state:
 edited_teams_df = st.data_editor(
     st.session_state.df_teams, num_rows="fixed", use_container_width=True, key="teams_editor"
 )
-edited_teams_df.to_csv(QUOTAS_CSV, index=False)
+
+if not edited_teams_df.equals(st.session_state.df_teams):
+  st.session_state.df_teams = edited_teams_df.copy()
+  edited_teams_df.to_csv(QUOTAS_CSV, index=False)
 
 st.markdown("---")
 
 # --- 3. STAFF ROSTER GRID & LOCK MANAGEMENT ---
 st.subheader("Staff Roster Grid")
-st.caption("Type a team name or leave status directly into any cell to lock it. Changes save automatically.")
+st.caption("Type a team name or leave status to lock cells. Empty/cleared cells resolve to `None`.")
 
-# Initialize session state from CSV ONLY ONCE when the app starts up
 if "df_staff" not in st.session_state:
   if ROSTER_CSV.exists():
     try:
-      df_staff_loaded = pd.read_csv(ROSTER_CSV, dtype=str).fillna("")
+      df_staff_loaded = pd.read_csv(ROSTER_CSV, dtype=str)
       for person in staff_members:
-        if not ((df_staff_loaded["Staff"] == person)).any():
+        if not (df_staff_loaded["Staff"] == person).any():
           new_row = {"Staff": person}
           for d in dates:
-            new_row[d] = ""
+            new_row[d] = None
           df_staff_loaded = pd.concat([df_staff_loaded, pd.DataFrame([new_row])], ignore_index=True)
       for d in dates:
         if d not in df_staff_loaded.columns:
-          df_staff_loaded[d] = ""
+          df_staff_loaded[d] = None
+      
+      # Convert artifact strings back to proper None values on load
+      df_staff_loaded = df_staff_loaded.replace(["nan", "None", "NaN", "NoneType", ""], np.nan)
       st.session_state.df_staff = df_staff_loaded[["Staff"] + dates]
     except Exception:
       st.session_state.df_staff = None
@@ -196,32 +199,32 @@ if "df_staff" not in st.session_state:
   if "df_staff" not in st.session_state or st.session_state.df_staff is None or len(dates) == 0:
     initial_data = {"Staff": staff_members}
     for d in dates:
-      initial_data[d] = ["" for _ in staff_members]
+      initial_data[d] = [None for _ in staff_members]
     st.session_state.df_staff = pd.DataFrame(initial_data)
 
-# Ensure strict string formatting for the grid view
+# Normalize empty or artifact values to None for grid view
 for d in dates:
   if d in st.session_state.df_staff.columns:
-    st.session_state.df_staff[d] = st.session_state.df_staff[d].fillna("").astype(str).replace(["nan", "None", "NaN"], "")
+    st.session_state.df_staff[d] = st.session_state.df_staff[d].replace(["nan", "None", "NaN", "NoneType", ""], np.nan)
 
-# Render the interactive data editor
 edited_staff_df = st.data_editor(
     st.session_state.df_staff, num_rows="fixed", use_container_width=True, key="staff_editor"
 )
 
-# Real-time sync: Update session state and persist to CSV immediately upon cell edit completion
+# Constant smart auto-save for staff roster grid with state diffing
 if not edited_staff_df.equals(st.session_state.df_staff):
   st.session_state.df_staff = edited_staff_df.copy()
-  # Clean potential string artifacts before writing to file
+  df_to_save = edited_staff_df.copy()
   for d in dates:
-    if d in edited_staff_df.columns:
-      edited_staff_df[d] = edited_staff_df[d].fillna("").astype(str).replace(["nan", "None", "NaN"], "")
-  edited_staff_df.to_csv(ROSTER_CSV, index=False)
+    if d in df_to_save.columns:
+      df_to_save[d] = df_to_save[d].replace(["nan", "None", "NaN", "NoneType", ""], np.nan)
+  df_to_save.to_csv(ROSTER_CSV, index=False)
 
 # --- 4. EXECUTION & CONTROLS ---
+st.markdown("---")
 col_btn1, col_btn2 = st.columns([1, 5])
 with col_btn1:
-  run_solver = st.button("🚀 Run Solver", type="primary")
+  run_solver = st.button("🚀 Run Solver", type="primary", use_container_width=True)
 with col_btn2:
   clear_auto = st.button("Clear Auto-Filled Values")
 
@@ -230,39 +233,48 @@ if clear_auto:
   for d in dates:
     col_vals = []
     for person in staff_members:
-      val = str(edited_staff_df.loc[edited_staff_df["Staff"] == person, d].values[0])
-      if "(auto)" in val:
-        col_vals.append("")
+      val = st.session_state.df_staff.loc[st.session_state.df_staff["Staff"] == person, d].values[0]
+      if pd.notna(val) and "(auto)" in str(val):
+        col_vals.append(None)
       else:
         col_vals.append(val)
     reset_data[d] = col_vals
-  st.session_state.df_staff = pd.DataFrame(reset_data)
-  st.session_state.df_staff.to_csv(ROSTER_CSV, index=False)
+  
+  df_reset = pd.DataFrame(reset_data)
+  st.session_state.df_staff = df_reset
+  df_reset.to_csv(ROSTER_CSV, index=False)
   st.rerun()
 
 if run_solver:
-  # Capture only true user locks from staff grid (ignoring cells with '(auto)')
+  # Capture true user locks safely ignoring None/NaN/empty values
   current_locks = {}
-  for _, row in edited_staff_df.iterrows():
+  for _, row in st.session_state.df_staff.iterrows():
     person = row["Staff"]
     current_locks[person] = {}
     for d in dates:
       if d in row:
-        val = str(row[d]).strip()
-        if "(auto)" in val:
-          continue
+        val = row[d]
         
-        val_clean = val.strip()
-        if val_clean in team_options:
-          current_locks[person][d] = val_clean
+        if pd.isna(val) or val is None:
+          continue
+          
+        val_str = str(val).strip()
+        
+        if val_str.lower() in ["nan", "none", ""]:
+          continue
+        if "(auto)" in val_str:
+          continue
+          
+        if val_str in team_options:
+          current_locks[person][d] = val_str
 
-  # Build team requirements dictionary and call requirements dynamically
+  # Build team requirements and call requirements dictionaries
   team_requirements = {}
   call_requirements = {}
 
   for d in dates:
     day_reqs = {}
-    for _, row in edited_teams_df.iterrows():
+    for _, row in st.session_state.df_teams.iterrows():
       team_name = row["Team"]
       val = int(row[d]) if d in row and pd.notnull(row[d]) else 0
       if team_name == "Call Req":
@@ -301,20 +313,28 @@ if run_solver:
           if person in current_locks and d in current_locks[person]:
             column_values.append(current_locks[person][d])
           else:
-            solved_val = roster_sched.teams_table[person].get(d, "")
-            column_values.append(
-                f"{solved_val} (auto)" if solved_val else ""
-            )
+            solved_val = roster_sched.teams_table[person].get(d, None)
+            if solved_val:
+              column_values.append(f"{solved_val} (auto)")
+            else:
+              column_values.append(None)
         new_grid_data[d] = column_values
 
       st.session_state.df_staff = pd.DataFrame(new_grid_data)
-      st.session_state.df_staff.to_csv(ROSTER_CSV, index=False)
-      st.success("Roster optimized successfully around your locked values and saved!")
+      
+      # Save solved results back to disk automatically
+      df_to_save = st.session_state.df_staff.copy()
+      for d in dates:
+        if d in df_to_save.columns:
+          df_to_save[d] = df_to_save[d].replace(["nan", "None", "NaN", "NoneType", ""], np.nan)
+      df_to_save.to_csv(ROSTER_CSV, index=False)
+
+      st.success("Roster optimized successfully, auto-filled values mapped to None where empty, and changes saved!")
       st.rerun()
     else:
       st.error(
-          "No feasible solution found with current manual locks. Check your"
-          " constraints or conflicting selections."
+          "No feasible solution found with current manual locks. Check your "
+          "constraints or conflicting selections."
       )
 
   except Exception as e:
