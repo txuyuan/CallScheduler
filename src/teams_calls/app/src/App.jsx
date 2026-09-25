@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { AllEnterpriseModule, ModuleRegistry, themeBalham } from 'ag-grid-enterprise';
 
@@ -36,8 +36,16 @@ export default function DynamicRosterGrid() {
   // Compute active date array dynamically
   const dateColumns = useMemo(() => getDatesBetween(startDate, endDate), [startDate, endDate]);
 
-  const [pinColWidth, setPinColWidth] = useState(100)
-  const [colWidth, setColWidth] = useState(120)
+  const [pinColWidth, setPinColWidth] = useState(100);
+  const [colWidth, setColWidth] = useState(120);
+  const defaultColDef = useMemo(() => {
+    return {
+      suppressHeaderMenuButton: true, // Hides the 3-dot button on every column header
+    };
+  }, []);
+
+  // Roster View Mode State: 'both', 'teams', or 'calls'
+  const [rosterViewMode, setRosterViewMode] = useState('both');
 
   // --- Initial Team Requirements Data ---
   const [teamRowData, setTeamRowData] = useState([
@@ -50,28 +58,62 @@ export default function DynamicRosterGrid() {
   // --- Initial Call Requirements Data ---
   const [callRowData, setCallRowData] = useState([
     { callName: "Call" }
-  ])
+  ]);
 
   // Dynamically extract team names from top table to feed bottom dropdown
   const availableTeams = useMemo(() => {
     return teamRowData.map(row => row.teamName).filter(Boolean);
   }, [teamRowData]);
 
-  // --- Initial Personnel Roster Data ---
-  const [rosterRowData, setRosterRowData] = useState([
+  // --- Separated Personnel Roster Data Structures ---
+  const [rosterTeamRowData, setRosterTeamRowData] = useState([
     { name: 'Person 1' },
     { name: 'Person 2' },
     { name: 'Person 3' },
     { name: 'Person 4' },
   ]);
 
+  const [rosterCallRowData, setRosterCallRowData] = useState([
+    { name: 'Person 1' },
+    { name: 'Person 2' },
+    { name: 'Person 3' },
+    { name: 'Person 4' },
+  ]);
+
+  // Combine the two separate states into a unified dataset for the grid UI
+  const rosterGridRowData = useMemo(() => {
+    return rosterTeamRowData.map((teamRow, index) => {
+      const callRow = rosterCallRowData[index] || { name: teamRow.name };
+      const merged = { name: teamRow.name };
+      
+      dateColumns.forEach(date => {
+        const callVal = callRow[date];
+        merged[date] = {
+          team: teamRow[date] || '',
+          // Explicitly check for null/undefined so boolean `false` is preserved!
+          call: callVal !== undefined && callVal !== null ? callVal : ''
+        };
+      });
+      return merged;
+    });
+  }, [rosterTeamRowData, rosterCallRowData, dateColumns]);
+
   const teamWrapperRef = useRef(null);
   const callWrapperRef = useRef(null);
   const rosterWrapperRef = useRef(null);
 
-  const calcDefaultHeight = ((rowCount) => {
-    return 33 + (rowCount * 29) + 18;
-  })
+  const calcDefaultHeight = ((rowCount, headers=1) => {
+    return (headers * 33) + (rowCount * 29) + 18;
+  });
+
+  // Automatically recalculate roster height when view mode or row count changes
+  useEffect(() => {
+    if (rosterWrapperRef.current) {
+      const rowCount = bottomGridApi ? bottomGridApi.getDisplayedRowCount() : rosterTeamRowData.length;
+      const headers = rosterViewMode === 'both' ? 2 : 1;
+      rosterWrapperRef.current.style.height = `${calcDefaultHeight(rowCount, headers)}px`;
+    }
+  }, [rosterViewMode, bottomGridApi, rosterTeamRowData.length]);
 
   const isResizingRef = useRef(false);
 
@@ -82,10 +124,8 @@ export default function DynamicRosterGrid() {
     if (!params.finished) return;
 
     const resizedCol = params.column;
-    if (!resizedCol) return;
-
-    const newWidth = resizedCol.getActualWidth();
-    const isPinned = resizedCol.isPinned();
+    const affectedCols = params.columns; // Contains child columns if a group header was resized
+    const isPinned = resizedCol ? resizedCol.isPinned() : false;
     
     isResizingRef.current = true;
 
@@ -93,7 +133,12 @@ export default function DynamicRosterGrid() {
     const allGrids = [topGridApi, bottomGridApi, middleGridApi].filter(Boolean);
 
     if (isPinned) {
-      setPinColWidth(newWidth)
+      if (!resizedCol) {
+        isResizingRef.current = false;
+        return;
+      }
+      const newWidth = resizedCol.getActualWidth();
+      setPinColWidth(newWidth);
       const sourceGrid = allGrids.find(api => api.getColumns().includes(resizedCol));
       if (sourceGrid) {
         const sourcePinnedCols = sourceGrid.getColumns().filter(col => col.isPinned());
@@ -111,19 +156,58 @@ export default function DynamicRosterGrid() {
         });
       }
     } else {
-      setColWidth(newWidth)
+      // Find the source grid using either the single resized column or the affected columns group
+      const sourceGrid = allGrids.find(api => {
+        const apiCols = api.getColumns();
+        if (resizedCol && apiCols.includes(resizedCol)) return true;
+        if (affectedCols && affectedCols.some(col => apiCols.includes(col))) return true;
+        return false;
+      });
+
+      const isRosterBoth = (sourceGrid === bottomGridApi && rosterViewMode === 'both');
+      const targetColToMeasure = resizedCol || (affectedCols && affectedCols[0]);
+
+      let newColWidth = colWidth;
+
+      if (isRosterBoth && affectedCols && affectedCols.length === 2) {
+        // Group header was resized in 'both' mode: sum the widths of the two children (Team + Call)
+        newColWidth = affectedCols.reduce((sum, col) => sum + col.getActualWidth(), 0);
+      } else if (isRosterBoth && targetColToMeasure) {
+        // A single sub-column was dragged directly in 'both' mode: double it to get full master width
+        newColWidth = targetColToMeasure.getActualWidth() * 2;
+      } else if (targetColToMeasure) {
+        // Normal single-column table (Top/Middle or Roster in single mode)
+        newColWidth = targetColToMeasure.getActualWidth();
+      }
+
+      setColWidth(newColWidth);
+
+      // Synchronize width across all active grids
       allGrids.forEach(gridApi => {
         const allCols = gridApi.getColumns();
-        const dateColIds = allCols
-          .filter(col => !col.isPinned())
-          .map(col => col.getColId());
-        
-        gridApi.applyColumnState({
-          state: dateColIds.map(id => ({
-            colId: id,
-            width: newWidth
-          }))
-        });
+        const unpinnedCols = allCols.filter(col => !col.isPinned());
+
+        const targetIsRosterBoth = (gridApi === bottomGridApi && rosterViewMode === 'both');
+
+        if (targetIsRosterBoth) {
+          // Bottom grid in 'both' mode splits the master width in half for each sub-column
+          const halfWidth = Math.floor(newColWidth / 2);
+          gridApi.applyColumnState({
+            state: unpinnedCols.map(col => ({
+              colId: col.getColId(),
+              width: halfWidth
+            }))
+          });
+        } else {
+          // Top, middle, and single-mode bottom grids receive the full master column width
+          const dateColIds = unpinnedCols.map(col => col.getColId());
+          gridApi.applyColumnState({
+            state: dateColIds.map(id => ({
+              colId: id,
+              width: newColWidth
+            }))
+          });
+        }
       });
     }
 
@@ -141,23 +225,22 @@ export default function DynamicRosterGrid() {
       type: 'numericColumn',
       width: colWidth,
       suppressMovable: true,
-      // Highlight weekends with a subtle darker grey background
       cellStyle: (params) => {
         if (isWeekend(params.colDef.field)) {
-          return { backgroundColor: '#f1f5f9' }; // Tailwind slate-100 equivalent
+          return { backgroundColor: '#f1f5f9' };
         }
         return null;
       },
       cellRenderer: (params) => {
         const val = params.value;
         if (val === null || val === undefined || val === '') {
-          return <span className="empty-placeholder text-gray-400 italic text-xs">Quota...</span>;
+          return <span className="empty-placeholder text-gray-400 italic text-xs">Quota</span>;
         }
         return <span className="text-gray-800 font-medium">{val}</span>;
       }
     }));
     return [...baseCols, ...dynamicCols];
-  }, [dateColumns]);
+  }, [dateColumns, pinColWidth, colWidth]);
 
   const handleTeamGridReady = (params) => {
     setTopGridApi(params.api);
@@ -170,7 +253,7 @@ export default function DynamicRosterGrid() {
   const handleAddTeamRow = () => {
     setTeamRowData(prevData => {
       const updatedData = [...prevData, {
-        name: ''
+        teamName: ''
       }];
 
       if (teamWrapperRef.current) {
@@ -211,7 +294,6 @@ export default function DynamicRosterGrid() {
       type: 'numericColumn',
       width: colWidth,
       suppressMovable: true,
-      // Highlight weekends
       cellStyle: (params) => {
         if (isWeekend(params.colDef.field)) {
           return { backgroundColor: '#f1f5f9' };
@@ -221,13 +303,13 @@ export default function DynamicRosterGrid() {
       cellRenderer: (params) => {
         const val = params.value;
         if (val === null || val === undefined || val === '') {
-          return <span className="empty-placeholder text-gray-400 italic text-xs">Calls...</span>;
+          return <span className="empty-placeholder text-gray-400 italic text-xs">Quota</span>;
         }
         return <span className="text-gray-800 font-medium">{val}</span>;
       }
     }));
     return [...baseCols, ...dynamicCols];
-  }, [dateColumns]);
+  }, [dateColumns, pinColWidth, colWidth]);
 
   const handleCallGridReady = (params) => {
     setMiddleGridApi(params.api);
@@ -237,82 +319,122 @@ export default function DynamicRosterGrid() {
     }
   };
 
-  // --- Dynamically Build Personnel Column Definitions ---
+  // --- Dynamically Build Personnel Column Definitions (Double Column System) ---
   const rosterColumnDefs = useMemo(() => {
     const baseCols = [{ field: 'name', headerName: 'Roster', pinned: 'left', width: pinColWidth, editable: true, suppressMovable: true }];
-    const dynamicCols = dateColumns.map(date => ({
-      field: date,
-      headerName: date,
-      editable: true,
-      width: colWidth,
-      suppressMovable: true,
-      // Highlight weekends
-      cellStyle: (params) => {
-        if (isWeekend(params.colDef.field)) {
-          return { backgroundColor: '#f1f5f9' };
+    
+    const dynamicCols = dateColumns.map(date => {
+      // Team Sub-Column
+      const teamSubCol = {
+        field: `${date}_team`,
+        headerName: rosterViewMode === 'both' ? 'Team' : date,
+        editable: true,
+        width: rosterViewMode === 'both' ? Math.floor(colWidth / 2) : colWidth,
+        suppressMovable: true,
+        cellStyle: isWeekend(date) ? { backgroundColor: '#f1f5f9' } : null,
+        valueGetter: (params) => params.data[date]?.team || '',
+        valueSetter: (params) => {
+          const rowIndex = params.node.rowIndex;
+          const newTeam = params.newValue;
+          setRosterTeamRowData(prev => {
+            const updated = [...prev];
+            updated[rowIndex] = { ...updated[rowIndex], [date]: newTeam };
+            return updated;
+          });
+          return true;
+        },
+        cellEditor: 'agRichSelectCellEditor',
+        cellEditorParams: {
+          values: availableTeams,
+          searchEnabled: true,
+          highlightMatch: true,
+        },
+        cellRenderer: (params) => {
+          const teamVal = params.data[date]?.team;
+          if (!teamVal) return <span className="empty-placeholder text-xs text-gray-400 italic">Team</span>;
+          return <span className="text-gray-800 font-medium">{teamVal}</span>;
         }
-        return null;
-      },
-      valueGetter: (params) => {
-        return params.data[date]?.team || '';
-      },
-      valueSetter: (params) => {
-        const newTeam = params.newValue;
-        const currentData = params.data[date] || {};
-        params.data[date] = {
-          ...currentData,
-          team: newTeam,
-          source: 'manual',
-          locked: true
-        };
-        return true;
-      },
-      cellEditor: 'agRichSelectCellEditor',
-      cellEditorParams: {
-        values: availableTeams,
-        searchEnabled: true,
-        highlightMatch: true,
-      },
-      cellRenderer: (params) => {
-        const currentData = params.data[date];
-        const teamVal = currentData?.team;
+      };
 
-        if (!teamVal) {
-          return <span className="empty-placeholder text-xs">Team...</span>;
+      // Call Sub-Column (Dropdown matching Team cell behavior)
+      const callSubCol = {
+        field: `${date}_call`,
+        headerName: rosterViewMode === 'both' ? 'Call' : date,
+        editable: true,
+        width: rosterViewMode === 'both' ? Math.floor(colWidth / 2) : colWidth,
+        suppressMovable: true,
+        cellStyle: isWeekend(date) ? { backgroundColor: '#f1f5f9' } : null,
+        
+        // Convert stored boolean to display string for the dropdown
+        valueGetter: (params) => {
+          const val = params.data[date]?.call;
+          if (val === true) return 'True';
+          if (val === false) return 'False';
+          return ''; // Unset / Default
+        },
+
+        // Convert selected dropdown string back to a boolean or empty state
+        valueSetter: (params) => {
+          const rowIndex = params.node.rowIndex;
+          const strVal = params.newValue;
+          
+          let newVal = '';
+          if (strVal === 'True') newVal = true;
+          else if (strVal === 'False') newVal = false;
+
+          setRosterCallRowData(prev => {
+            const updated = [...prev];
+            updated[rowIndex] = { ...updated[rowIndex], [date]: newVal };
+            return updated;
+          });
+          return true;
+        },
+
+        // Use the rich select editor just like the team cell
+        cellEditor: 'agRichSelectCellEditor',
+        cellEditorParams: {
+          values: ['True', 'False'],
+        },
+
+        // Grayed-out placeholder when unset, matching team cell styling
+        cellRenderer: (params) => {
+          const val = params.data[date]?.call;
+          if (val === '' || val === null || val === undefined) {
+            return <span className="empty-placeholder text-xs text-gray-400 italic">Call</span>;
+          }
+          if (val === true) {
+            return <span className="text-indigo-600 font-semibold">True</span>;
+          }
+          return <span className="text-red-500 font-semibold">False</span>;
         }
+      };
 
-        const isManual = currentData.source === 'manual';
-        return (
-          <span className={isManual ? 'text-blue-700 font-semibold' : 'text-gray-800'}>
-            {teamVal} {currentData.onCall ? '📞' : ''} {isManual && '🔒'}
-          </span>
-        );
-      }
-    }));
+      if (rosterViewMode === 'teams') return teamSubCol;
+      if (rosterViewMode === 'calls') return callSubCol;
+
+      // 'both' mode: Grouped parent column
+      return {
+        headerName: date,
+        headerClass: isWeekend(date) ? 'bg-slate-100' : '',
+        children: [teamSubCol, callSubCol]
+      };
+    });
+
     return [...baseCols, ...dynamicCols];
-  }, [dateColumns, availableTeams]);
+  }, [dateColumns, rosterViewMode, pinColWidth, colWidth, availableTeams]);
 
   const handleRosterGridReady = (params) => {
     setBottomGridApi(params.api);
-    if (rosterWrapperRef.current) {
-      const rowCount = params.api.getDisplayedRowCount() || 4;
-      rosterWrapperRef.current.style.height = `${calcDefaultHeight(rowCount)}px`;
-    }
   };
 
   const handleAddRosterRow = () => {
-    setRosterRowData(prevData => {
-      const updatedData = [...prevData, {
-        name: ''
-      }];
+    const emptyRow = {
+      name: '',
+      ...dateColumns.reduce((acc, date) => ({ ...acc, [date]: '' }), {})
+    };
 
-      if (rosterWrapperRef.current) {
-        const rowCount = updatedData.length;
-        rosterWrapperRef.current.style.height = `${calcDefaultHeight(rowCount)}px`;
-      }
-
-      return updatedData;
-    });
+    setRosterTeamRowData(prev => [...prev, emptyRow]);
+    setRosterCallRowData(prev => [...prev, emptyRow]);
   };
 
   const onRosterCellStoppedEditing = async (params) => {
@@ -402,7 +524,7 @@ export default function DynamicRosterGrid() {
           </div>
           <button 
             onClick={() => alert("Packaging timeline data to POST /api/roster/run-model")}
-            className="bg-indigo-600 text-white px-4 py-2 rounded shadow hover:bg-indigo-700 transition self-end text-sm font-medium"
+            className="bg-blue-600 text-white px-4 py-2 rounded shadow hover:bg-blue-700 transition self-end text-sm font-medium"
           >
             Run Optimization Model
           </button>
@@ -411,11 +533,11 @@ export default function DynamicRosterGrid() {
 
       {/* TOP TABLE: Team Requirements */}
       <div className="">
-        <div className="flex justify-between items-center mb-2">
+        <div className="flex justify-between items-center mb-1">
           <h3 className="text-xs font-bold tracking-wider text-gray-400 mb-2">Personnel Assignment & Call Roster</h3>
           <button 
             onClick={handleAddTeamRow}
-            className="mb-2 px-3 py-1 text-xs font-semibold text-indigo-600 bg-indigo-50 hover:bg-gray-100 hover:text-indigo-900 rounded-md transition-colors"
+            className="mb-2 px-3 py-1 text-xs font-semibold text-white bg-gray-400 hover:bg-gray-600 rounded-md transition-colors"
           >
             +Row
           </button>
@@ -425,6 +547,7 @@ export default function DynamicRosterGrid() {
             theme={customThemeBalham}
             rowData={teamRowData}
             columnDefs={teamColumnDefs}
+            defaultColDef={defaultColDef}
             suppressMovableColumns={true}
             onGridReady={handleTeamGridReady}
             onColumnResized={handleColumnResized}
@@ -455,6 +578,7 @@ export default function DynamicRosterGrid() {
           <AgGridReact
             theme={customThemeBalham}
             rowData={callRowData}
+            defaultColDef={defaultColDef}
             columnDefs={callColumnDefs}
             suppressMovableColumns={true}
             onGridReady={handleCallGridReady}
@@ -480,11 +604,36 @@ export default function DynamicRosterGrid() {
 
       {/* BOTTOM TABLE: Personnel Shifts */}
       <div className="">
-        <div className="flex justify-between items-center mb-2">
-          <h3 className="text-xs font-bold tracking-wider text-gray-400 mb-2">Personnel Assignment & Call Roster</h3>
+        <div className="flex justify-between items-center mb-1">
+          <div className="flex items-center gap-4 mb-2">
+            <h3 className="text-xs font-bold tracking-wider text-gray-400">Personnel Assignment & Call Roster</h3>
+            
+            {/* View Mode Toggle Buttons */}
+            <div className="inline-flex rounded-md shadow-sm bg-gray-100 p-0.5 text-xs">
+              <button
+                onClick={() => setRosterViewMode('teams')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-colors ${rosterViewMode === 'teams' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+              >
+                Teams Only
+              </button>
+              <button
+                onClick={() => setRosterViewMode('calls')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-colors ${rosterViewMode === 'calls' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+              >
+                Calls Only
+              </button>
+              <button
+                onClick={() => setRosterViewMode('both')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-colors ${rosterViewMode === 'both' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+              >
+                Both
+              </button>
+            </div>
+          </div>
+
           <button 
               onClick={handleAddRosterRow}
-              className="px-3 py-1 text-xs font-semibold text-indigo-600 bg-indigo-50 hover:bg-gray-100 hover:text-indigo-900 rounded-md transition-colors"
+              className="mb-2 px-3 py-1 text-xs font-semibold text-white bg-gray-400 hover:bg-gray-600 rounded-md transition-colors"
             >
             +Row
           </button>
@@ -492,8 +641,9 @@ export default function DynamicRosterGrid() {
         <div ref={rosterWrapperRef} className="resize-y overflow-auto min-h-[100px] max-h-[600px]">
           <AgGridReact
             theme={customThemeBalham}
-            rowData={rosterRowData}
+            rowData={rosterGridRowData}
             columnDefs={rosterColumnDefs}
+            defaultColDef={defaultColDef}
             suppressMovableColumns={true}
             onGridReady={handleRosterGridReady}
             onCellStoppedEditing={onRosterCellStoppedEditing}
@@ -502,7 +652,6 @@ export default function DynamicRosterGrid() {
 
             onColumnResized={handleColumnResized}
             onCellKeyDown={handleCellKeyDown}
-            onCellValueChanged={handleCellChanged(setTeamRowData)}
 
             cellSelection={{
               handle: { mode: 'fill' }
@@ -515,9 +664,10 @@ export default function DynamicRosterGrid() {
           />
         </div>
       </div>
+
       <pre>{JSON.stringify(teamRowData, null, 2)}</pre>
       <pre>{JSON.stringify(callRowData, null, 2)}</pre>
-      <pre>{JSON.stringify(rosterRowData, null, 2)}</pre>
+      <pre>{JSON.stringify({ rosterTeamRowData, rosterCallRowData }, null, 2)}</pre>
     </div>
   );
 }
