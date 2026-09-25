@@ -17,6 +17,13 @@ const getDatesBetween = (startStr, endStr) => {
   return dates;
 };
 
+// Helper to check if a date string is Saturday or Sunday
+const isWeekend = (dateStr) => {
+  const d = new Date(dateStr);
+  const day = d.getDay();
+  return day === 0 || day === 6; // 0 = Sunday, 6 = Saturday
+};
+
 export default function DynamicRosterGrid() {
   const [topGridApi, setTopGridApi] = useState(null);
   const [middleGridApi, setMiddleGridApi] = useState(null);
@@ -42,7 +49,7 @@ export default function DynamicRosterGrid() {
 
   // --- Initial Call Requirements Data ---
   const [callRowData, setCallRowData] = useState([
-    { callName: "HO Call" }
+    { callName: "Call" }
   ])
 
   // Dynamically extract team names from top table to feed bottom dropdown
@@ -68,79 +75,81 @@ export default function DynamicRosterGrid() {
 
   const isResizingRef = useRef(false);
 
-const handleColumnResized = (params) => {
-  if (isResizingRef.current) return;
-  
-  // Only sync once the user finishes dragging the column edge
-  if (!params.finished) return;
+  const handleColumnResized = (params) => {
+    if (isResizingRef.current) return;
+    
+    // Only sync once the user finishes dragging the column edge
+    if (!params.finished) return;
 
-  const resizedCol = params.column;
-  if (!resizedCol) return;
+    const resizedCol = params.column;
+    if (!resizedCol) return;
 
-  const newWidth = resizedCol.getActualWidth();
-  const isPinned = resizedCol.isPinned();
-  
-  isResizingRef.current = true;
+    const newWidth = resizedCol.getActualWidth();
+    const isPinned = resizedCol.isPinned();
+    
+    isResizingRef.current = true;
 
-  // Get all active grid instances
-  const allGrids = [topGridApi, bottomGridApi, middleGridApi].filter(Boolean);
+    // Get all active grid instances
+    const allGrids = [topGridApi, bottomGridApi, middleGridApi].filter(Boolean);
 
-  if (isPinned) {
-    // --- PINNED COLUMNS SYNC (Matched by position/index) ---
-    // Find which index this pinned column is in its grid (e.g., 1st pinned column)
-    const sourceGrid = allGrids.find(api => api.getColumns().includes(resizedCol));
-    if (sourceGrid) {
-      const sourcePinnedCols = sourceGrid.getColumns().filter(col => col.isPinned());
-      const pinnedIndex = sourcePinnedCols.indexOf(resizedCol);
+    if (isPinned) {
+      setPinColWidth(newWidth)
+      const sourceGrid = allGrids.find(api => api.getColumns().includes(resizedCol));
+      if (sourceGrid) {
+        const sourcePinnedCols = sourceGrid.getColumns().filter(col => col.isPinned());
+        const pinnedIndex = sourcePinnedCols.indexOf(resizedCol);
 
-      // Apply that exact width to the pinned column at the same index in all other grids
+        allGrids.forEach(gridApi => {
+          const targetPinnedCols = gridApi.getColumns().filter(col => col.isPinned());
+          const targetCol = targetPinnedCols[pinnedIndex];
+          
+          if (targetCol) {
+            gridApi.applyColumnState({
+              state: [{ colId: targetCol.getColId(), width: newWidth }]
+            });
+          }
+        });
+      }
+    } else {
+      setColWidth(newWidth)
       allGrids.forEach(gridApi => {
-        const targetPinnedCols = gridApi.getColumns().filter(col => col.isPinned());
-        const targetCol = targetPinnedCols[pinnedIndex];
+        const allCols = gridApi.getColumns();
+        const dateColIds = allCols
+          .filter(col => !col.isPinned())
+          .map(col => col.getColId());
         
-        if (targetCol) {
-          gridApi.applyColumnState({
-            state: [{ colId: targetCol.getColId(), width: newWidth }]
-          });
-        }
+        gridApi.applyColumnState({
+          state: dateColIds.map(id => ({
+            colId: id,
+            width: newWidth
+          }))
+        });
       });
     }
-  } else {
-    // --- UNPINNED (DATE) COLUMNS SYNC ---
-    allGrids.forEach(gridApi => {
-      const allCols = gridApi.getColumns();
-      const dateColIds = allCols
-        .filter(col => !col.isPinned())
-        .map(col => col.getColId());
-      
-      gridApi.applyColumnState({
-        state: dateColIds.map(id => ({
-          colId: id,
-          width: newWidth
-        }))
-      });
-    });
-  }
 
-  isResizingRef.current = false;
-};
+    isResizingRef.current = false;
+  };
 
-  // --- Dynamically Build Team Column Definitions (Numbers Only + Placeholders) ---
+  // --- Dynamically Build Team Column Definitions ---
   const teamColumnDefs = useMemo(() => {
     const baseCols = [{ field: 'teamName', headerName: 'Team', pinned: 'left', width: pinColWidth, editable: true, suppressMovable: true }];
     const dynamicCols = dateColumns.map(date => ({
       field: date,
       headerName: date,
       editable: true,
-      cellEditor: 'agNumberCellEditor', // Restricts input to numbers only
+      cellEditor: 'agNumberCellEditor',
       type: 'numericColumn',
       width: colWidth,
       suppressMovable: true,
-
-      // RENDERER: Shows greyed-out italic placeholder when empty, numbers when filled
+      // Highlight weekends with a subtle darker grey background
+      cellStyle: (params) => {
+        if (isWeekend(params.colDef.field)) {
+          return { backgroundColor: '#f1f5f9' }; // Tailwind slate-100 equivalent
+        }
+        return null;
+      },
       cellRenderer: (params) => {
         const val = params.value;
-        // Check if value is null, undefined, or empty string
         if (val === null || val === undefined || val === '') {
           return <span className="empty-placeholder text-gray-400 italic text-xs">Quota...</span>;
         }
@@ -152,9 +161,6 @@ const handleColumnResized = (params) => {
 
   const handleTeamGridReady = (params) => {
     setTopGridApi(params.api);
-
-    // Dynamically calculate initial height to fit rows perfectly on load
-    // Header (~45px) + (Number of rows * Row height ~43px) + padding safety buffer
     if (teamWrapperRef.current) {
       const rowCount = params.api.getDisplayedRowCount() || 4;
       teamWrapperRef.current.style.height = `${calcDefaultHeight(rowCount)}px`;
@@ -164,11 +170,9 @@ const handleColumnResized = (params) => {
   const handleAddTeamRow = () => {
     setTeamRowData(prevData => {
       const updatedData = [...prevData, {
-        name: '',
-        ...dateColumns.reduce((acc, date) => ({ ...acc, [date]: '' }), {})
+        name: ''
       }];
 
-      // Recalculate height based on the new row count
       if (teamWrapperRef.current) {
         const rowCount = updatedData.length;
         teamWrapperRef.current.style.height = `${calcDefaultHeight(rowCount)}px`;
@@ -181,17 +185,13 @@ const handleColumnResized = (params) => {
   const onTeamCellEditingStopped = async (params) => {
     const { colDef, newValue, oldValue, node } = params;
     
-    // Only update if they actually changed the team name
     if (colDef.field === 'teamName' && newValue !== oldValue) {
-
-      // Update local React state so availableTeams re-evaluates immediately
       setTeamRowData(prev => 
         prev.map((row, index) => 
           index === node.rowIndex ? { ...row, teamName: newValue } : row
         )
       );
 
-      // Optional backend sync
       await fetch('/api/teams/update', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -200,22 +200,26 @@ const handleColumnResized = (params) => {
     }
   };
 
-  // --- Dynamically Build Call Column Definitions (Numbers Only + Placeholders) ---
+  // --- Dynamically Build Call Column Definitions ---
   const callColumnDefs = useMemo(() => {
     const baseCols = [{ field: 'callName', headerName: 'Call', pinned: 'left', width: pinColWidth, editable: true, suppressMovable: true }];
     const dynamicCols = dateColumns.map(date => ({
       field: date,
       headerName: date,
       editable: true,
-      cellEditor: 'agNumberCellEditor', // Restricts input to numbers only
+      cellEditor: 'agNumberCellEditor',
       type: 'numericColumn',
       width: colWidth,
       suppressMovable: true,
-
-      // RENDERER: Shows greyed-out italic placeholder when empty, numbers when filled
+      // Highlight weekends
+      cellStyle: (params) => {
+        if (isWeekend(params.colDef.field)) {
+          return { backgroundColor: '#f1f5f9' };
+        }
+        return null;
+      },
       cellRenderer: (params) => {
         const val = params.value;
-        // Check if value is null, undefined, or empty string
         if (val === null || val === undefined || val === '') {
           return <span className="empty-placeholder text-gray-400 italic text-xs">Calls...</span>;
         }
@@ -227,16 +231,13 @@ const handleColumnResized = (params) => {
 
   const handleCallGridReady = (params) => {
     setMiddleGridApi(params.api);
-
-    // Dynamically calculate initial height to fit rows perfectly on load
-    // Header (~45px) + (Number of rows * Row height ~43px) + padding safety buffer
     if (callWrapperRef.current) {
       const rowCount = params.api.getDisplayedRowCount() || 4;
       callWrapperRef.current.style.height = `${calcDefaultHeight(rowCount)}px`;
     }
   };
 
-  // --- Dynamically Build Personnel Column Definitions (Dropdown Constrained) ---
+  // --- Dynamically Build Personnel Column Definitions ---
   const rosterColumnDefs = useMemo(() => {
     const baseCols = [{ field: 'name', headerName: 'Roster', pinned: 'left', width: pinColWidth, editable: true, suppressMovable: true }];
     const dynamicCols = dateColumns.map(date => ({
@@ -245,13 +246,16 @@ const handleColumnResized = (params) => {
       editable: true,
       width: colWidth,
       suppressMovable: true,
-
-      // 1. EXTRACT: Just passes the team string or empty string to the editor
+      // Highlight weekends
+      cellStyle: (params) => {
+        if (isWeekend(params.colDef.field)) {
+          return { backgroundColor: '#f1f5f9' };
+        }
+        return null;
+      },
       valueGetter: (params) => {
         return params.data[date]?.team || '';
       },
-
-      // 2. WRITE BACK: Safely updates the metadata object
       valueSetter: (params) => {
         const newTeam = params.newValue;
         const currentData = params.data[date] || {};
@@ -263,20 +267,16 @@ const handleColumnResized = (params) => {
         };
         return true;
       },
-
       cellEditor: 'agRichSelectCellEditor',
       cellEditorParams: {
         values: availableTeams,
         searchEnabled: true,
         highlightMatch: true,
       },
-
-      // 3. RENDERER: Gracefully handles empty cells without breaking the editor
       cellRenderer: (params) => {
         const currentData = params.data[date];
         const teamVal = currentData?.team;
 
-        // If empty, show greyed-out italic placeholder
         if (!teamVal) {
           return <span className="empty-placeholder text-xs">Team...</span>;
         }
@@ -294,9 +294,6 @@ const handleColumnResized = (params) => {
 
   const handleRosterGridReady = (params) => {
     setBottomGridApi(params.api);
-
-    // Dynamically calculate initial height to fit rows perfectly on load
-    // Header (~45px) + (Number of rows * Row height ~43px) + padding safety buffer
     if (rosterWrapperRef.current) {
       const rowCount = params.api.getDisplayedRowCount() || 4;
       rosterWrapperRef.current.style.height = `${calcDefaultHeight(rowCount)}px`;
@@ -306,11 +303,9 @@ const handleColumnResized = (params) => {
   const handleAddRosterRow = () => {
     setRosterRowData(prevData => {
       const updatedData = [...prevData, {
-        name: '',
-        ...dateColumns.reduce((acc, date) => ({ ...acc, [date]: '' }), {})
+        name: ''
       }];
 
-      // Recalculate height based on the new row count
       if (rosterWrapperRef.current) {
         const rowCount = updatedData.length;
         rosterWrapperRef.current.style.height = `${calcDefaultHeight(rowCount)}px`;
@@ -320,7 +315,6 @@ const handleColumnResized = (params) => {
     });
   };
 
-  // --- Handle Auto-Save when cell edit stops ---
   const onRosterCellStoppedEditing = async (params) => {
     const { data, colDef } = params;
     const cellData = data[colDef.field];
@@ -337,7 +331,6 @@ const handleColumnResized = (params) => {
     });
   };
 
-  // Custom Balham theme with visible horizontal and vertical grid lines
   const customThemeBalham = themeBalham.withParams({
     borderColor: '#cbd5e1',
     rowBorder: '1px solid #cbd5e1',
@@ -347,11 +340,9 @@ const handleColumnResized = (params) => {
   const handleCellKeyDown = (params) => {
     const { event, api } = params;
     
-    // Check for Ctrl + A (or Cmd + A on Mac)
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
-      event.preventDefault(); // Stop native AG Grid "select all"
+      event.preventDefault();
       
-      // Get all columns, filtering out the pinned ones (e.g., 'teamName' or 'name')
       const allColumns = api.getColumns();
       const unpinnedColumns = allColumns.filter(col => {
         const colDef = col.getColDef();
@@ -364,7 +355,6 @@ const handleColumnResized = (params) => {
       const lastCol = unpinnedColumns[unpinnedColumns.length - 1];
       const lastRowIndex = api.getDisplayedRowCount() - 1;
 
-      // Clear existing selections and apply range strictly to unpinned columns
       api.clearCellSelection();
       api.addCellRange({
         rowStartIndex: 0,
@@ -373,6 +363,14 @@ const handleColumnResized = (params) => {
         columnEnd: lastCol,
       });
     }
+  };
+
+  const handleCellChanged = (setter) => (params) => {
+    setter(prevData => {
+      const updated = [...prevData];
+      updated[params.node.rowIndex] = { ...params.data };
+      return updated;
+    });
   };
 
   return (
@@ -411,7 +409,7 @@ const handleColumnResized = (params) => {
         </div>
       </div>
 
-      {/* TOP TABLE: Team Requirements (Vertical Resizing via resize-y overflow-auto) */}
+      {/* TOP TABLE: Team Requirements */}
       <div className="">
         <div className="flex justify-between items-center mb-2">
           <h3 className="text-xs font-bold tracking-wider text-gray-400 mb-2">Personnel Assignment & Call Roster</h3>
@@ -434,12 +432,11 @@ const handleColumnResized = (params) => {
 
             onCellEditingStopped={onTeamCellEditingStopped}
             stopEditingWhenCellsLoseFocus={true}
-            onCellKeyDown={handleCellKeyDown} // ctrl + a excludes pinned columns
+            onCellKeyDown={handleCellKeyDown}
+            onCellValueChanged={handleCellChanged(setTeamRowData)}
 
             cellSelection={{
-              handle: {
-                mode: 'fill', // Enables the Excel-style fill/drag handle
-              }
+              handle: { mode: 'fill' }
             }}
             enableFillHandle={true}
             undoRedoCellEditing={true}
@@ -451,7 +448,7 @@ const handleColumnResized = (params) => {
         </div>
       </div>
 
-      {/* MIDDLE TABLE: Call Requirements (Vertical Resizing via resize-y overflow-auto) */}
+      {/* MIDDLE TABLE: Call Requirements */}
       <div className="">
         <h3 className="text-xs font-bold tracking-wider text-gray-400 mb-2">Team Requirements Configuration</h3>
         <div ref={callWrapperRef} className="resize-y overflow-auto block min-h-[40px] max-h-[600px]">
@@ -465,13 +462,11 @@ const handleColumnResized = (params) => {
             alignedGrids={[topGridApi, bottomGridApi].filter(Boolean)}
 
             stopEditingWhenCellsLoseFocus={true}
-            onCellKeyDown={handleCellKeyDown} // ctrl + a excludes pinned columns
-            style={{ height: '100%', width: '100%' }}
+            onCellKeyDown={handleCellKeyDown}
+            onCellValueChanged={handleCellChanged(setTeamRowData)}
 
             cellSelection={{
-              handle: {
-                mode: 'fill', // Enables the Excel-style fill/drag handle
-              }
+              handle: { mode: 'fill' }
             }}
             enableFillHandle={true}
             undoRedoCellEditing={true}
@@ -483,7 +478,7 @@ const handleColumnResized = (params) => {
         </div>
       </div>
 
-      {/* BOTTOM TABLE: Personnel Shifts (Vertical Resizing via resize-y overflow-auto) */}
+      {/* BOTTOM TABLE: Personnel Shifts */}
       <div className="">
         <div className="flex justify-between items-center mb-2">
           <h3 className="text-xs font-bold tracking-wider text-gray-400 mb-2">Personnel Assignment & Call Roster</h3>
@@ -504,13 +499,13 @@ const handleColumnResized = (params) => {
             onCellStoppedEditing={onRosterCellStoppedEditing}
             stopEditingWhenCellsLoseFocus={true}  
             alignedGrids={[topGridApi, middleGridApi].filter(Boolean)}
+
             onColumnResized={handleColumnResized}
-            onCellKeyDown={handleCellKeyDown} // ctrl + a excludes pinned columns
+            onCellKeyDown={handleCellKeyDown}
+            onCellValueChanged={handleCellChanged(setTeamRowData)}
 
             cellSelection={{
-              handle: {
-                mode: 'fill', // Enables the Excel-style fill/drag handle
-              }
+              handle: { mode: 'fill' }
             }}
             undoRedoCellEditing={true}  
             undoRedoCellEditingLimit={20}
@@ -520,6 +515,9 @@ const handleColumnResized = (params) => {
           />
         </div>
       </div>
+      <pre>{JSON.stringify(teamRowData, null, 2)}</pre>
+      <pre>{JSON.stringify(callRowData, null, 2)}</pre>
+      <pre>{JSON.stringify(rosterRowData, null, 2)}</pre>
     </div>
   );
 }
