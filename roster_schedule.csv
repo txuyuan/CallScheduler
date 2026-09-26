@@ -1,12 +1,12 @@
 Staff,01/11/2026,02/11/2026,03/11/2026,04/11/2026,05/11/2026,06/11/2026,07/11/2026,08/11/2026,09/11/2026,10/11/2026,11/11/2026,12/11/2026,13/11/2026,14/11/2026,15/11/2026,16/11/2026,17/11/2026,18/11/2026,19/11/2026,20/11/2026,21/11/2026,22/11/2026,23/11/2026,24/11/2026,25/11/2026,26/11/2026,27/11/2026,28/11/2026,29/11/2026,30/11/2026
-Alpha,,leave,leave,leave,leave,leave,,,ds,leave,ds,ds,ds,(call),,subobs,subobs (call),subobs,subobs,subobs (call),,,9ab,leave,9ab,9ab,9ab,,,ps_cover
-Bravo,,b1,b1 (call),b1,b1,b1,,,ds,ds,leave,leave,leave,,,subobs,subobs,subobs,subobs (call),subobs,,,leave,9ab,leave,leave,leave,,,9ab
-Charlie,,go (call),go,go,go (call),go,,,go,go,go,go,go,,(call),go,go,leave,leave,leave,,,go,go,go,go,go,,(call),go
-Delta,(call),9ab,9ab,9ab,9ab,9ab,(call),,b1,b1,b1,b1,b1,,,go,leave,go,go,go,,,subobs (call),subobs,subobs,subobs,subobs (call),,,ds
-Echo,,bg,bg,bg,bg,bg,,(call),subobs,subobs,subobs (call),subobs,subobs,,(call),b1,b1,b1,b1,b1,,,9ab,9ab,9ab,9ab (call),9ab,,,leave
-Foxtrot,(call),ds,ds,ds,ds,ds (call),,,subobs,subobs,leave,subobs,subobs,,,9ab,leave,9ab,leave,leave,,,bg,bg (call),bg,bg,bg,,,subobs
-Golf,,ps_cover,ps_cover,ps_cover,ps_cover,ps_cover,(call),,subobs,subobs,subobs,leave,leave,,,9ab (call),9ab,leave,9ab,9ab,(call),,leave,leave,leave,leave,leave,,,subobs (call)
-Hotel,,leave,leave,leave,subobs,subobs,,,9ab (call),9ab,9ab,9ab (call),9ab,,,ds,ds,ds,ds,ds,(call),,ps_cover,ps_cover,ps_cover,ps_cover,ps_cover,(call),,bg
-India,,subobs,subobs,subobs,leave,leave,,,9ab,9ab (call),9ab,9ab,9ab,,,bg,bg,bg,bg,bg,,(call),b1,b1,b1,b1,b1,(call),,subobs
-Juliet,,9ab,9ab,9ab (call),9ab,9ab,,(call),bg,bg,bg,bg,bg (call),,,ps_cover,ps_cover,ps_cover,ps_cover,ps_cover,,,subobs,subobs,subobs,subobs,subobs,,(call),b1
-Kilo,,subobs,subobs,subobs,subobs,subobs,,,ps_cover,ps_cover,ps_cover,ps_cover,ps_cover,(call),,leave,9ab,9ab (call),9ab,9ab,,(call),ds,ds,ds (call),ds,ds,,,9ab
+Alpha,,leave,leave,leave,leave,leave,,,subobs,leave,subobs,subobs,subobs,(call),,ds,ds,ds,ds,ds (call),,,b1,leave,b1,b1,b1,,,ps_cover
+Bravo,,ds,ds,ds,ds,ds,,,bg,bg,leave,leave,leave,,,9ab,9ab,9ab,9ab (call),9ab,,,leave,b1,leave,leave,leave,,,subobs
+Charlie,,go,go,go,go,go,,,go,go,go,go,go,,(call),go,go,leave,leave,leave,,,go,go,go,go,go,,,go (call)
+Delta,(call),9ab,9ab,9ab,9ab,9ab,(call),,ds,ds,ds,ds,ds,,,go,leave,go,go,go,,,subobs,subobs,subobs,subobs,subobs (call),,,bg
+Echo,,b1,b1,b1,b1,b1,,(call),subobs,subobs,subobs,subobs,subobs,,(call),9ab,9ab,9ab,9ab,9ab,,,ds,ds (call),ds,ds,ds,,,leave
+Foxtrot,,ds,ds,ds,ds,ds,,,9ab,9ab,leave,9ab,9ab (call),,,subobs,leave,subobs,leave,leave,,,ps_cover,ps_cover,ps_cover,ps_cover,ps_cover,(call),,9ab
+Golf,,bg,bg,bg,bg,bg,,,9ab,9ab,9ab,leave,leave,,,subobs (call),subobs,leave,subobs,subobs,(call),,leave,leave,leave,leave,leave,,,9ab
+Hotel,,leave,leave,leave,go,go,,,b1,b1,b1,b1,b1,,,ps_cover,ps_cover,ps_cover,ps_cover,ps_cover,,(call),9ab,9ab,9ab (call),9ab,9ab,,(call),subobs
+India,,b1,b1,b1,leave,leave,,,9ab,9ab,9ab,9ab,9ab,,,bg,bg,bg,bg,bg,,,subobs (call),subobs,subobs,subobs,subobs,(call),,b1
+Juliet,,subobs,subobs,subobs,subobs,subobs,,,ps_cover,ps_cover,ps_cover,ps_cover,ps_cover,(call),,b1,b1,b1 (call),b1,b1,,(call),bg,bg,bg,bg (call),bg,,,ds
+Kilo,,b1,b1,b1,b1,b1,,,bg,bg,bg,bg,bg,,,leave,subobs (call),subobs,subobs,subobs,(call),,9ab,9ab,9ab,9ab,9ab,,(call),subobs

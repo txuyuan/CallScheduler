@@ -205,6 +205,8 @@ def main():
         date_cols = header[1:]
         for row in reader:
             person = row[0]
+            if person == '':
+                continue
             for i, d in enumerate(date_cols):
                 status = row[i+1]
                 if status != '-1':
@@ -219,6 +221,8 @@ def main():
         date_cols = header[1:]
         for row in reader:
             person = row[0]
+            if person == '':
+                continue
             for i, d in enumerate(date_cols):
                 val = row[i+1]
                 if val != '':
@@ -233,6 +237,8 @@ def main():
         date_cols = header[1:]
         for row in reader:
             person = row[0]
+            if person == '':
+                continue
             for i, d in enumerate(date_cols):
                 val = int(row[i+1])
                 if val != -1:
@@ -247,6 +253,8 @@ def main():
         date_cols = header[1:]
         for row in reader:
             team_name = row[0]
+            if team_name == '':
+                continue
             for i, d in enumerate(date_cols):
                 val = int(row[i+1])
                 if val > 0:
@@ -290,7 +298,7 @@ def main():
     
     if success:
         print("\n--- Roster Solved Successfully! Exporting Consolidated CSV file... ---\n")
-        csv_filename = "roster_schedule.csv"
+        csv_filename = "output_roster.csv"
         with open(csv_filename, mode='w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             header = ['Staff'] + dates
