@@ -1,0 +1,40 @@
+﻿,Staff,1/11/26,2/11/26,3/11/26,4/11/26,5/11/26,6/11/26,7/11/26,8/11/26,9/11/26,10/11/26,11/11/26,12/11/26,13/11/2026,14/11/2026,15/11/2026,16/11/2026,17/11/2026,18/11/2026,19/11/2026,20/11/2026,21/11/2026,22/11/2026,23/11/2026,24/11/2026,25/11/2026,26/11/2026,27/11/2026,28/11/2026,29/11/2026,30/11/2026,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,Total Calls,Total Leaves
+,Alpha,,leave,leave,leave,leave,leave,,,ds,leave,ds,ds,ds,(call),,subobs,subobs (call),subobs,subobs,subobs (call),,,9ab,leave,9ab,9ab,9ab,,,ps_cover,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,3,7
+,Bravo,,b1,b1 (call),b1,b1,b1,,,ds,ds,leave,leave,leave,,,subobs,subobs,subobs,subobs (call),subobs,,,leave,9ab,leave,leave,leave,,,9ab,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,2,7
+,Charlie,,go (call),go,go,go (call),go,,,go,go,go,go,go,,(call),go,go,leave,leave,leave,,,go,go,go,go,go,,(call),go,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,4,3
+,Delta,(call),9ab,9ab,9ab,9ab,9ab,(call),,b1,b1,b1,b1,b1,,,go,leave,go,go,go,,,subobs (call),subobs,subobs,subobs,subobs (call),,,ds,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,4,1
+,Echo,,bg,bg,bg,bg,bg,,(call),subobs,subobs,subobs (call),subobs,subobs,,(call),b1,b1,b1,b1,b1,,,9ab,9ab,9ab,9ab (call),9ab,,,leave,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,4,1
+,Foxtrot,(call),ds,ds,ds,ds,ds (call),,,subobs,subobs,leave,subobs,subobs,,,9ab,leave,9ab,leave,leave,,,bg,bg (call),bg,bg,bg,,,subobs,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,3,4
+,Golf,,ps_cover,ps_cover,ps_cover,ps_cover,ps_cover,(call),,subobs,subobs,subobs,leave,leave,,,9ab (call),9ab,leave,9ab,9ab,(call),,leave,leave,leave,leave,leave,,,subobs (call),,,,,,,,,,,,,,,,,,,,,,,,,,,,,,4,8
+,Hotel,,leave,leave,leave,subobs,subobs,,,9ab (call),9ab,9ab,9ab (call),9ab,,,ds,ds,ds,ds,ds,(call),,ps_cover,ps_cover,ps_cover,ps_cover,ps_cover,(call),,bg,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,4,3
+,India,,subobs,subobs,subobs,leave,leave,,,9ab,9ab (call),9ab,9ab,9ab,,,bg,bg,bg,bg,bg,,(call),b1,b1,b1,b1,b1,(call),,subobs,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,3,2
+,Juliet,,9ab,9ab,9ab (call),9ab,9ab,,(call),bg,bg,bg,bg,bg (call),,,ps_cover,ps_cover,ps_cover,ps_cover,ps_cover,,,subobs,subobs,subobs,subobs,subobs,,(call),b1,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,4,0
+,Kilo,,subobs,subobs,subobs,subobs,subobs,,,ps_cover,ps_cover,ps_cover,ps_cover,ps_cover,(call),,leave,9ab,9ab (call),9ab,9ab,,(call),ds,ds,ds (call),ds,ds,,,9ab,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,4,1
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Team,Req ,,Leave per team,,,,,,,Leave per team,,,,,,,Leave per team,,,,,,,Leave per team,,,,,,,Leave per team,,,,,,,Leave per team,,,,,,,Leave per team,,,,,,,Leave per team,,,,,,,,,,
+subobs,3,subobs,1,1,1,1,1,,subobs,0,0,1,1,1,,subobs,1,1,1,1,1,,subobs,1,1,1,1,1,,subobs,0,3,3,3,3,,subobs,3,3,3,3,3,,subobs,3,3,3,3,3,,subobs,3,3,3,3,3,,subobs,3,,,
+ds,2,ds,1,1,1,1,1,,ds,0,1,1,1,1,,ds,1,1,1,1,1,,ds,1,1,1,1,1,,ds,1,2,2,2,2,,ds,2,2,2,2,2,,ds,2,2,2,2,2,,ds,2,2,2,2,2,,ds,2,,,
+9ab,2,9ab,0,0,0,0,0,,9ab,0,0,0,0,0,,9ab,0,0,0,0,0,,9ab,0,0,0,0,0,,9ab,0,2,2,2,2,,9ab,2,2,2,2,2,,9ab,2,2,2,2,2,,9ab,2,2,2,2,2,,9ab,2,,,
+go,1,go,0,0,0,0,0,,go,0,0,0,0,0,,go,-1,0,0,0,0,,go,0,0,0,0,0,,go,0,1,1,1,1,,go,1,1,1,1,1,,go,1,1,1,1,1,,go,1,1,1,1,1,,go,1,,,
+b1,1,b1,0,0,0,0,0,,b1,0,0,0,0,0,,b1,0,0,0,0,0,,b1,0,0,0,0,0,,b1,0,1,1,1,1,,b1,1,1,1,1,1,,b1,1,1,1,1,1,,b1,1,1,1,1,1,,b1,1,,,
+bg,1,bg,0,0,0,0,0,,bg,0,0,0,0,0,,bg,0,0,0,0,0,,bg,0,0,0,0,0,,bg,0,1,1,1,1,,bg,1,1,1,1,1,,bg,1,1,1,1,1,,bg,1,1,1,1,1,,bg,1,,,
+ps_cover,1,leave,0,0,0,0,0,,leave,0,0,0,0,0,,leave,0,0,0,0,0,,leave,0,0,0,0,0,,leave,0,1,1,1,1,,leave,1,1,1,1,1,,leave,1,1,1,1,1,,leave,1,1,1,1,1,,leave,1,,,
+Requirement,Priority,,Leave per team,,,,,,,Leave per team,,,,,,,Leave per team,,,,,,,Leave per team,,,,,,,Leave per team,,,,,,,Leave per team,,,,,,,Leave per team,,,,,,,Leave per team,,,,,,,,,,
+3,7,subobs,-3,-3,-3,-3,-3,,subobs,-3,-3,-3,-3,-3,,subobs,-3,-3,-3,-3,-3,,subobs,-3,-3,-3,-3,-3,,subobs,-3,-3,-3,-3,-3,,subobs,-3,-3,-3,-3,-3,,subobs,-3,-3,-3,-3,-3,,subobs,-3,-3,-3,-3,-3,,subobs,-3,,,
+2,6,ds,-2,-2,-2,-2,-2,,ds,-2,-2,-2,-2,-2,,ds,-2,-2,-2,-2,-2,,ds,-2,-2,-2,-2,-2,,ds,-2,-2,-2,-2,-2,,ds,-2,-2,-2,-2,-2,,ds,-2,-2,-2,-2,-2,,ds,-2,-2,-2,-2,-2,,ds,-2,,,
+2,2,9ab,-2,-2,-2,-2,-2,,9ab,-2,-2,-2,-2,-2,,9ab,-2,-2,-2,-2,-2,,9ab,-2,-2,-2,-2,-2,,9ab,-2,-2,-2,-2,-2,,9ab,-2,-2,-2,-2,-2,,9ab,-2,-2,-2,-2,-2,,9ab,-2,-2,-2,-2,-2,,9ab,-2,,,
+1,0,go,-1,-1,-1,-1,-1,,go,-1,-1,-1,-1,-1,,go,-1,-1,-1,-1,-1,,go,-1,-1,-1,-1,-1,,go,-1,-1,-1,-1,-1,,go,-1,-1,-1,-1,-1,,go,-1,-1,-1,-1,-1,,go,-1,-1,-1,-1,-1,,go,-1,,,
+1,0,b1,-1,-1,-1,-1,-1,,b1,-1,-1,-1,-1,-1,,b1,-1,-1,-1,-1,-1,,b1,-1,-1,-1,-1,-1,,b1,-1,-1,-1,-1,-1,,b1,-1,-1,-1,-1,-1,,b1,-1,-1,-1,-1,-1,,b1,-1,-1,-1,-1,-1,,b1,-1,,,
+1,0,bg,-1,-1,-1,-1,-1,,bg,-1,-1,-1,-1,-1,,bg,-1,-1,-1,-1,-1,,bg,-1,-1,-1,-1,-1,,bg,-1,-1,-1,-1,-1,,bg,-1,-1,-1,-1,-1,,bg,-1,-1,-1,-1,-1,,bg,-1,-1,-1,-1,-1,,bg,-1,,,
+,0,leave,0,0,0,0,0,,leave,0,0,0,0,0,,leave,0,0,0,0,0,,leave,0,0,0,0,0,,leave,0,0,0,0,0,,leave,0,0,0,0,0,,leave,0,0,0,0,0,,leave,0,0,0,0,0,,leave,0,,,
+1,0,post_call_cover,-1,-1,-1,-1,-1,,post_call_cover,-1,-1,-1,-1,-1,,post_call_cover,-1,-1,-1,-1,-1,,post_call_cover,-1,-1,-1,-1,-1,,post_call_cover,-1,-1,-1,-1,-1,,post_call_cover,-1,-1,-1,-1,-1,,post_call_cover,-1,-1,-1,-1,-1,,post_call_cover,-1,-1,-1,-1,-1,,post_call_cover,-1,,,
+Team,,,Calls per team,,,,,,,Calls per team,,,,,,,Calls per team,,,,,,,Calls per team,,,,,,,Calls per team,,,,,,,Calls per team,,,,,,,Calls per team,,,,,,,Calls per team,,,,,,,,,,
+subobs,,subobs,0,0,0,0,0,,subobs,0,0,1,0,0,,subobs,0,1,0,1,1,,subobs,1,0,0,0,1,,subobs,1,0,0,0,0,,subobs,0,0,0,0,0,,subobs,0,0,0,0,0,,subobs,0,0,0,0,0,,subobs,0,,,
+ds,,ds,0,0,0,0,1,,ds,0,0,0,0,0,,ds,0,0,0,0,0,,ds,0,0,1,0,0,,ds,0,0,0,0,0,,ds,0,0,0,0,0,,ds,0,0,0,0,0,,ds,0,0,0,0,0,,ds,0,,,
+9ab,,9ab,0,0,1,0,0,,9ab,1,1,0,1,0,,9ab,1,0,1,0,0,,9ab,0,0,0,1,0,,9ab,0,0,0,0,0,,9ab,0,0,0,0,0,,9ab,0,0,0,0,0,,9ab,0,0,0,0,0,,9ab,0,,,
+go,,go,1,0,0,1,0,,go,0,0,0,0,0,,go,0,0,0,0,0,,go,0,0,0,0,0,,go,0,0,0,0,0,,go,0,0,0,0,0,,go,0,0,0,0,0,,go,0,0,0,0,0,,go,0,,,
+b1,,b1,0,1,0,0,0,,b1,0,0,0,0,0,,b1,0,0,0,0,0,,b1,0,0,0,0,0,,b1,0,0,0,0,0,,b1,0,0,0,0,0,,b1,0,0,0,0,0,,b1,0,0,0,0,0,,b1,0,,,
+bg,,bg,0,0,0,0,0,,bg,0,0,0,0,1,,bg,0,0,0,0,0,,bg,0,1,0,0,0,,bg,0,0,0,0,0,,bg,0,0,0,0,0,,bg,0,0,0,0,0,,bg,0,0,0,0,0,,bg,0,,,

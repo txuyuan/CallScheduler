@@ -24,7 +24,7 @@ class Roster:
         team_requirements=None,
         team_options=None,
         team_sacrificability=None, 
-        team=None,
+        teams=None,
         call_requirements=None,
         calls=None,
         leaves_blockouts=None,
@@ -35,8 +35,9 @@ class Roster:
         min_team_requirements=None,
         max_solve_time_seconds=None,
     ):
-        self.start_date = start_date
-        self.end_date = end_date
+        self.start_date = self._parse_date_universal(start_date).strftime('%d/%m/%Y')
+        self.end_date = self._parse_date_universal(end_date).strftime('%d/%m/%Y')
+        
         self.team_requirements = team_requirements or {}
         self.team_options = team_options or ['team_ds', 'leave', 'team_cos', 'team_c', 'ps_cover']
         
@@ -49,9 +50,9 @@ class Roster:
         }
 
         self.persons = persons or []
-        self.team = team or {}  # User locks for teams: {person: {date_str: team_name}}
+        self.teams = teams or {}  
         self.call_requirements = call_requirements or {}
-        self.calls = calls or {}  # User locks for calls: {person: {date_str: 0 or 1}}
+        self.calls = calls or {}  
         self.leaves_blockouts = leaves_blockouts or {}
         self.leave_buffers = leave_buffers or [1, 0]
         self.blockout_buffers = blockout_buffers or [1, 0]
@@ -74,9 +75,30 @@ class Roster:
         self.team_vars = {}
         self.call_vars = {}
 
-        self.max_solve_time_seconds = max_solve_time_seconds or 10  # Default fallback safeguard
+        self.max_solve_time_seconds = max_solve_time_seconds or 10
 
         self.initialise()
+
+    def _parse_date_universal(self, raw_date):
+        """Attempts to parse a date string using multiple flexible formats, supporting non-zero padding and 2/4 digit years."""
+        if isinstance(raw_date, datetime):
+            return raw_date
+        
+        cleaned = str(raw_date).strip()
+        formats = (
+            '%d/%m/%Y', '%d/%m/%y', '%d-%m-%Y', '%d-%m-%y',
+            '%d/%m/Y', '%d/%m/y', '%d-%m/Y', '%d-%m/y',
+            '%Y-%m-%d', '%y-%m-%d', '%Y/%m/%d', '%y/%m/%d'
+        )
+        
+        for fmt in formats:
+            try:
+                return datetime.strptime(cleaned, fmt)
+            except ValueError:
+                continue
+        
+        # Fallback evaluation using standard dateutil if available, or raise error
+        raise ValueError(f"Unable to parse malformed date string: '{raw_date}'")
 
     def _init_globals(self):
         start = datetime.strptime(self.start_date, '%d/%m/%Y')
@@ -93,7 +115,7 @@ class Roster:
                 self.weekend_chunks.append(idx)
 
     def _init_leaves_blockouts(self):
-        persons = list(self.leaves_blockouts.keys()) or list(self.team.keys())
+        persons = list(self.leaves_blockouts.keys()) or list(self.teams.keys())
         date_to_idx = {d: i for i, d in enumerate(self.dates)}
 
         for person in persons:
@@ -102,10 +124,15 @@ class Roster:
             
             p_entries = self.leaves_blockouts.get(person, [])
             for date_str, status in p_entries:
-                if date_str not in date_to_idx:
+                try:
+                    d_obj = self._parse_date_universal(date_str)
+                except ValueError:
                     continue
-                idx = date_to_idx[date_str]
-                d_obj = datetime.strptime(date_str, '%d/%m/%Y')
+                
+                standard_date_str = d_obj.strftime('%d/%m/%Y')
+                if standard_date_str not in date_to_idx:
+                    continue
+                idx = date_to_idx[standard_date_str]
 
                 status_str = str(status).strip().upper()
                 if status_str == 'L':
@@ -136,21 +163,28 @@ class Roster:
                             self.nighttime_unavailable[person][target_idx] = 1
 
     def _init_calls(self):
+        date_to_idx = {d: i for i, d in enumerate(self.dates)}
+
         for person in self.persons:
             self.call_vars[person] = {}
             for idx, date_str in enumerate(self.dates):
                 self.call_vars[person][idx] = self.model.NewBoolVar(f"call_{person}_{idx}")
                 
-                # Constraint: Force call variable to 0 if the staff member is unavailable at night
                 if self.nighttime_unavailable.get(person, {}).get(idx, 0) == 1:
                     self.model.Add(self.call_vars[person][idx] == 0)
 
-                # Constraint: Apply user manual locks for calls if present
-                if person in self.calls and date_str in self.calls[person]:
-                    locked_call_val = int(self.calls[person][date_str])
-                    self.model.Add(self.call_vars[person][idx] == locked_call_val)
+                # Check manual call locks with universal date parser
+                if person in self.calls:
+                    for raw_d, val in self.calls[person].items():
+                        try:
+                            parsed_d = self._parse_date_universal(raw_d)
+                            if parsed_d.strftime('%d/%m/%Y') == date_str:
+                                locked_call_val = int(val)
+                                self.model.Add(self.call_vars[person][idx] == locked_call_val)
+                                break
+                        except ValueError:
+                            continue
 
-        # Constraint: Enforce a minimum interval spacing between assigned calls for each person.
         for person in self.persons:
             for idx in range(len(self.dates) - self.call_interval):
                 self.model.AddAtMostOne([
@@ -158,7 +192,6 @@ class Roster:
                     for offset in range(self.call_interval + 1)
                 ])
 
-        # Constraint: Ensure total daily assigned calls match the required daily requirement.
         for idx, date_str in enumerate(self.dates):
             required_calls = self.call_requirements.get(date_str, 0)
             if required_calls > 0:
@@ -187,20 +220,25 @@ class Roster:
                     0, len(self.team_options) - 1, f"team_{person}_{idx}"
                 )
 
-                # Constraint: lock in pre-booked leaves automatically
                 if self.daytime_unavailable.get(person, {}).get(idx, 0) == 1:                   
                     self.model.Add(self.team_vars[person][idx] == leave_idx)
                 else:
                     self.model.Add(self.team_vars[person][idx] != leave_idx)
 
-                # Constraint: Apply user manual locks for teams/status if present
-                if person in self.team and date_str in self.team[person]:
-                    locked_team_name = str(self.team[person][date_str]).replace(" (auto)", "").strip()
-                    if locked_team_name in self.team_to_idx:
-                        locked_idx = self.team_to_idx[locked_team_name]
-                        self.model.Add(self.team_vars[person][idx] == locked_idx)
+                # Check manual teams locks with universal date parser
+                if person in self.teams:
+                    for raw_d, t_val in self.teams[person].items():
+                        try:
+                            parsed_d = self._parse_date_universal(raw_d)
+                            if parsed_d.strftime('%d/%m/%Y') == date_str:
+                                locked_team_name = str(t_val).replace(" (auto)", "").strip()
+                                if locked_team_name in self.team_to_idx:
+                                    locked_idx = self.team_to_idx[locked_team_name]
+                                    self.model.Add(self.team_vars[person][idx] == locked_idx)
+                                break
+                        except ValueError:
+                            continue
 
-        # Constraint: Enforce minimum required staffing headcounts for each team (for weekdays)
         if self.min_team_requirements:
             for idx, date_str in enumerate(self.dates):
                 d_obj = datetime.strptime(date_str, '%d/%m/%Y')
@@ -231,7 +269,6 @@ class Roster:
             
             monday_obj = d_obj - timedelta(days=d_obj.weekday())
             week_id = monday_obj.strftime('%d/%m/%Y')
-            
             weeks_dict.setdefault(week_id, []).append(idx)
 
         exclusive_team_indices = [
@@ -239,7 +276,6 @@ class Roster:
             if name.startswith('team_') or name == 'ps_cover'
         ]
 
-        # Constraints per person and per week
         for person in self.persons:
             for week_id, week_indices in weeks_dict.items():
                 person_week_indices = [idx for idx in week_indices if idx in self.team_vars.get(person, {})]
@@ -260,10 +296,8 @@ class Roster:
                     self.model.AddMaxEquality(team_used_this_week, t_assigned_vars)
                     week_exclusive_team_flags.append(team_used_this_week)
                 
-                # Constraint: Limit different teams any person can work per week
                 self.model.Add(sum(week_exclusive_team_flags) <= self.max_teams_per_week)
 
-                # Constraint: Ensure post-call-cover is not also post call
                 for idx in person_week_indices:
                     d_obj = datetime.strptime(self.dates[idx], '%d/%m/%Y')
                     if d_obj.weekday() >= 5:
@@ -395,27 +429,24 @@ class Roster:
         self._build_objective()
 
     def check_valid(self):
-        if self.persons == []:
+        if not self.persons:
             print("WARNING: No staff members provided. Roster cannot be generated.")
             return False
-        if self.call_requirements == {}:
+        if not self.call_requirements:
             print("WARNING: No call requirements provided. Roster cannot be generated.")
             return False
-        if self.team_requirements == {}:
-            print("WARNING: No team requirements provided. Roster cannot be generated.")
+        if not self.team_requirements:
+            print("WARNING: No teams requirements provided. Roster cannot be generated.")
             return False
-        if self.team_options == []:
-            print("WARNING: No team options provided. Roster cannot be generated.")
+        if not self.team_options:
+            print("WARNING: No teams options provided. Roster cannot be generated.")
             return False
-        if self.team_sacrificability == {}:
-            print("WARNING: No team priorities provided. Roster cannot be generated.")
+        if not self.team_sacrificability:
+            print("WARNING: No teams priorities provided. Roster cannot be generated.")
             return False
         if self.max_solve_time_seconds <= 0:
             print("WARNING: No maximum solving time provided. Roster cannot be generated")
             return False
-        if not self.leaves_blockouts:
-            print("WARNING: No leaves/blockouts provided. Roster can still be generated")
-            return True
         return True
 
     def solve(self):
