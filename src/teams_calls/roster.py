@@ -364,14 +364,122 @@ class Roster:
                     self.model.Add(has_pcc_week + has_leave_week <= 1)
     
     def _build_objective(self):
+        # ==========================================
+        # 1. SHORT-TERM: 7-Day Rolling Window Spread
+        # ==========================================
         spread_penalties = []
         for person in self.persons:
+            person_calls = self.call_vars.get(person, {})
             for idx in range(len(self.dates) - 6):
-                window_calls = [self.call_vars[person][idx + offset] for offset in range(7)]
-                excess_calls = self.model.NewIntVar(0, 7, f"excess_calls_{person}_{idx}")
-                self.model.Add(excess_calls == sum(window_calls))
-                spread_penalties.append(excess_calls)
+                window_calls = [person_calls[idx + offset] for offset in range(7) if (idx + offset) in person_calls]
+                if window_calls:
+                    excess_calls = self.model.NewIntVar(0, 7, f"excess_calls_{person}_{idx}")
+                    self.model.Add(excess_calls == sum(window_calls))
+                    spread_penalties.append(excess_calls)
+
+        # ==========================================
+        # 2. LONG-TERM: Calendar-Month Equity & Smoothing
+        # ==========================================
+        months_dict = {}
+        for idx, date_str in enumerate(self.dates):
+            d_obj = datetime.strptime(date_str, '%d/%m/%Y')
+            month_key = d_obj.strftime('%Y-%m')
+            months_dict.setdefault(month_key, []).append(idx)
         
+        sorted_months = sorted(months_dict.keys())
+        monthly_smoothing_penalties = []
+        monthly_equity_penalties = []
+
+        for person in self.persons:
+            person_calls = self.call_vars.get(person, {})
+            person_monthly_sums = []
+            
+            for m_key in sorted_months:
+                m_indices = months_dict[m_key]
+                m_sum = self.model.NewIntVar(0, len(m_indices), f"m_sum_{person}_{m_key}")
+                self.model.Add(m_sum == sum(person_calls[idx] for idx in m_indices if idx in person_calls))
+                person_monthly_sums.append(m_sum)
+            
+            # A. Monthly Equity (busiest vs quietest month)
+            if person_monthly_sums:
+                m_max = self.model.NewIntVar(0, len(self.dates), f"m_max_{person}")
+                m_min = self.model.NewIntVar(0, len(self.dates), f"m_min_{person}")
+                self.model.AddMaxEquality(m_max, person_monthly_sums)
+                self.model.AddMinEquality(m_min, person_monthly_sums)
+                
+                monthly_equity_variance = self.model.NewIntVar(0, len(self.dates), f"m_var_{person}")
+                self.model.Add(monthly_equity_variance == m_max - m_min)
+                monthly_equity_penalties.append(monthly_equity_variance)
+
+            # B. Monthly Smoothing (penalize sharp spikes/drops between adjacent months)
+            for i in range(len(person_monthly_sums) - 1):
+                diff = self.model.NewIntVar(-len(self.dates), len(self.dates), f"diff_{person}_{i}")
+                abs_diff = self.model.NewIntVar(0, len(self.dates), f"abs_diff_{person}_{i}")
+                
+                self.model.Add(diff == person_monthly_sums[i+1] - person_monthly_sums[i])
+                self.model.AddAbsEquality(abs_diff, diff)
+                monthly_smoothing_penalties.append(abs_diff)
+
+        # ==========================================
+        # 3. SEQUENTIAL: Gap-Between-Calls Minimization
+        # ==========================================
+        largest_gaps = []
+        num_days = len(self.dates)
+
+        for person in self.persons:
+            person_calls = self.call_vars.get(person, {})
+            unavailable_map = self.nighttime_unavailable.get(person, {})
+            gaps = []
+            
+            prev_rest = self.model.NewIntVar(0, num_days + 1, f"prev_rest_{person}_init")
+            self.model.Add(prev_rest == 0)
+
+            for day in range(num_days):
+                call_var = person_calls.get(day)
+                is_unavailable = unavailable_map.get(day, 0)
+
+                is_rest_day = self.model.NewBoolVar(f"is_rest_{person}_{day}")
+                is_working_day = self.model.NewBoolVar(f"is_working_{person}_{day}")
+
+                if call_var is not None:
+                    if is_unavailable == 1:
+                        # If unavailable/blockout, it's treated as forced rest/off
+                        self.model.Add(is_rest_day == 1)
+                        self.model.Add(is_working_day == 0)
+                    else:
+                        # Rest day means no call assigned
+                        self.model.Add(call_var == 0).OnlyEnforceIf(is_rest_day)
+                        self.model.Add(call_var != 0).OnlyEnforceIf(is_rest_day.Not())
+                        self.model.Add(call_var == 1).OnlyEnforceIf(is_working_day)
+                        self.model.Add(call_var != 1).OnlyEnforceIf(is_working_day.Not())
+                else:
+                    self.model.Add(is_rest_day == 1)
+                    self.model.Add(is_working_day == 0)
+
+                # tmp = prev_rest + 1
+                tmp = self.model.NewIntVar(0, num_days + 1, f"rest_tmp_{person}_{day}")
+                self.model.Add(tmp == prev_rest + 1)
+                
+                # new_rest = tmp * is_rest_day
+                new_rest = self.model.NewIntVar(0, num_days + 1, f"rest_{person}_{day}")
+                self.model.AddMultiplicationEquality(new_rest, [tmp, is_rest_day])
+
+                # gap_weighted = prev_rest * is_working_day
+                gap_weighted = self.model.NewIntVar(0, num_days + 1, f"gap_{person}_{day}")
+                self.model.AddMultiplicationEquality(gap_weighted, [prev_rest, is_working_day])
+                gaps.append(gap_weighted)
+
+                prev_rest = new_rest
+
+            gaps.append(prev_rest)  # trailing rest period at the end of the horizon
+
+            largest_gap = self.model.NewIntVar(0, num_days + 1, f"max_gap_{person}")
+            self.model.AddMaxEquality(largest_gap, gaps)
+            largest_gaps.append(largest_gap)
+
+        # ==========================================
+        # 4. GLOBAL: Weekday/Weekend & Team Evenness
+        # ==========================================
         staff_weekday_sums = []
         staff_weekend_sums = []
         for person in self.persons:
@@ -425,6 +533,9 @@ class Roster:
             self.model.Add(person_team_variance == p_max_team - p_min_team)
             team_evenness_penalties.append(person_team_variance)
 
+        # ==========================================
+        # 5. EXCESS REQUIREMENTS PENALTIES
+        # ==========================================
         excess_penalties = []
         for idx, date_str in enumerate(self.dates):
             d_obj = datetime.strptime(date_str, '%d/%m/%Y')
@@ -463,12 +574,18 @@ class Roster:
 
                 excess_penalties.append(excess * weight)
 
+        # ==========================================
+        # COMBINED OBJECTIVE WEIGHTS
+        # ==========================================
         total_objective = (
-            sum(spread_penalties) * 2 +
-            wd_disparity * 5 +
-            we_disparity * 5 +
-            sum(team_evenness_penalties) * 3 +
-            sum(excess_penalties)
+            sum(spread_penalties) * 2 +                  # 7-day rolling window
+            sum(monthly_equity_penalties) * 4 +          # Monthly max/min variance
+            sum(monthly_smoothing_penalties) * 3 +       # Month-to-month transition smoothness
+            sum(largest_gaps) * 2 +                      # Gap minimization between shifts
+            wd_disparity * 5 +                           # Weekday parity across horizon
+            we_disparity * 5 +                           # Weekend parity across horizon
+            sum(team_evenness_penalties) * 3 +           # Team workload balance
+            sum(excess_penalties)                        # Meeting staffing targets safely
         )
         self.model.Minimize(total_objective)
 
