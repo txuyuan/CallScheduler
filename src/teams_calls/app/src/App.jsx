@@ -68,14 +68,8 @@ export default function DynamicRosterGrid() {
     return teamRowData.map(row => row.teamName).filter(Boolean);
   }, [teamRowData]);
 
-  const [rosterTeamRowData, setRosterTeamRowData] = useState([
-    { name: 'Person 1' },
-    { name: 'Person 2' },
-    { name: 'Person 3' },
-    { name: 'Person 4' },
-  ]);
-
-  const [rosterCallRowData, setRosterCallRowData] = useState([
+  // --- UNIFIED ROSTER STATE ---
+  const [rosterRowData, setRosterRowData] = useState([
     { name: 'Person 1' },
     { name: 'Person 2' },
     { name: 'Person 3' },
@@ -125,13 +119,6 @@ export default function DynamicRosterGrid() {
     }, 500);
   }, []);
 
-  // --- ASYNC NON-BLOCKING STATE UPDATER ---
-  const updateStateAsync = useCallback((setter, updaterFn) => {
-    requestAnimationFrame(() => {
-      setter(updaterFn);
-    });
-  }, []);
-
   useEffect(() => {
     const handleBeforeUnload = () => {
       if (dirtyQueueRef.current.size > 0) flushQueue();
@@ -143,7 +130,7 @@ export default function DynamicRosterGrid() {
     };
   }, []);
 
-  useEffect(() => {
+  const loadBackendState = useCallback(() => {
     fetch('http://localhost:8000/api/roster/state')
       .then(res => res.json())
       .then(data => {
@@ -159,11 +146,29 @@ export default function DynamicRosterGrid() {
 
         if (data.team_row_data) setTeamRowData(data.team_row_data);
         if (data.call_row_data) setCallRowData(data.call_row_data);
-        if (data.roster_team_row_data) setRosterTeamRowData(data.roster_team_row_data);
-        if (data.roster_call_row_data) setRosterCallRowData(data.roster_call_row_data);
+        
+        if (data.roster_row_data) {
+          setRosterRowData(data.roster_row_data);
+        } else if (data.roster_team_row_data) {
+          const merged = data.roster_team_row_data.map((tRow, i) => {
+            const cRow = data.roster_call_row_data?.[i] || {};
+            const row = { name: tRow.name };
+            Object.keys(tRow).forEach(k => {
+              if (k !== 'name') {
+                row[k] = { team: tRow[k], call: cRow[k] ?? '' };
+              }
+            });
+            return row;
+          });
+          setRosterRowData(merged);
+        }
       })
       .catch(err => console.error("Failed to load backend state:", err));
   }, []);
+
+  useEffect(() => {
+    loadBackendState();
+  }, [loadBackendState]);
 
   const updateBackendSettings = async (updatedSettings) => {
     setSaveStatus('Saving settings...');
@@ -180,22 +185,6 @@ export default function DynamicRosterGrid() {
     }
   };
 
-  const rosterGridRowData = useMemo(() => {
-    return rosterTeamRowData.map((teamRow, index) => {
-      const callRow = rosterCallRowData[index] || { name: teamRow.name };
-      const merged = { name: teamRow.name };
-      
-      dateColumns.forEach(date => {
-        const callVal = callRow[date];
-        merged[date] = {
-          team: teamRow[date] || '',
-          call: callVal !== undefined && callVal !== null ? callVal : ''
-        };
-      });
-      return merged;
-    });
-  }, [rosterTeamRowData, rosterCallRowData, dateColumns]);
-
   const teamWrapperRef = useRef(null);
   const callWrapperRef = useRef(null);
   const rosterWrapperRef = useRef(null);
@@ -206,11 +195,11 @@ export default function DynamicRosterGrid() {
 
   useEffect(() => {
     if (rosterWrapperRef.current) {
-      const rowCount = bottomGridApi ? bottomGridApi.getDisplayedRowCount() : rosterTeamRowData.length;
+      const rowCount = bottomGridApi ? bottomGridApi.getDisplayedRowCount() : rosterRowData.length;
       const headers = rosterViewMode === 'both' ? 2 : 1;
       rosterWrapperRef.current.style.height = `${calcDefaultHeight(Math.max(rowCount, 1), headers)}px`;
     }
-  }, [rosterViewMode, bottomGridApi, rosterTeamRowData.length]);
+  }, [rosterViewMode, bottomGridApi, rosterRowData.length]);
 
   useEffect(() => {
     if (teamWrapperRef.current) {
@@ -324,7 +313,7 @@ export default function DynamicRosterGrid() {
   const handleAddTeamRow = () => {
     const newRow = { teamName: `Team ${teamRowData.length + 1}` };
     dateColumns.forEach(date => { newRow[date] = ''; });
-    updateStateAsync(setTeamRowData, prev => [...prev, newRow]);
+    setTeamRowData(prev => [...prev, newRow]);
   };
 
   const onTeamCellValueChanged = async (event) => {
@@ -345,7 +334,6 @@ export default function DynamicRosterGrid() {
         setSaveStatus('⚠️ Update team name failed');
       }
     } else {
-      // Synchronous state update prevents race condition on Enter/Edit completion
       setTeamRowData(prev => {
         const updated = [...prev];
         updated[node.rowIndex] = { ...node.data };
@@ -395,7 +383,6 @@ export default function DynamicRosterGrid() {
     const { node, column, oldValue, newValue } = event;
     if (oldValue === newValue) return;
 
-    // Synchronous state update prevents race condition on Enter/Edit completion
     setCallRowData(prev => {
       const updated = [...prev];
       updated[node.rowIndex] = { ...node.data };
@@ -419,9 +406,12 @@ export default function DynamicRosterGrid() {
         valueSetter: (params) => {
           const rowIndex = params.node.rowIndex;
           const newTeam = params.newValue;
-          updateStateAsync(setRosterTeamRowData, prev => {
+          setRosterRowData(prev => {
             const updated = [...prev];
-            updated[rowIndex] = { ...updated[rowIndex], [date]: newTeam };
+            updated[rowIndex] = {
+              ...updated[rowIndex],
+              [date]: { ...(updated[rowIndex][date] || {}), team: newTeam }
+            };
             return updated;
           });
           queueCellUpdate('roster_team', rowIndex, date, newTeam);
@@ -460,9 +450,12 @@ export default function DynamicRosterGrid() {
           const strVal = params.newValue;
           let newVal = strVal === 'True' ? true : strVal === 'False' ? false : '';
 
-          updateStateAsync(setRosterCallRowData, prev => {
+          setRosterRowData(prev => {
             const updated = [...prev];
-            updated[rowIndex] = { ...updated[rowIndex], [date]: newVal };
+            updated[rowIndex] = {
+              ...updated[rowIndex],
+              [date]: { ...(updated[rowIndex][date] || {}), call: newVal }
+            };
             return updated;
           });
           queueCellUpdate('roster_call', rowIndex, date, newVal);
@@ -495,22 +488,44 @@ export default function DynamicRosterGrid() {
     });
 
     return [...baseCols, ...dynamicCols];
-  }, [dateColumns, rosterViewMode, pinColWidth, colWidth, availableTeams, updateStateAsync, queueCellUpdate]);
+  }, [dateColumns, rosterViewMode, pinColWidth, colWidth, availableTeams, queueCellUpdate]);
 
   const handleRosterGridReady = (params) => {
     setBottomGridApi(params.api);
   };
 
-  const handleAddRosterRow = () => {
-    const newName = `Person ${rosterTeamRowData.length + 1}`;
-    const newTeamRow = { name: newName };
-    const newCallRow = { name: newName };
+  const handleAddRosterRow = async () => {
+    const newName = `Person ${rosterRowData.length + 1}`;
+    const newRow = { name: newName };
     dateColumns.forEach(date => { 
-      newTeamRow[date] = ''; 
-      newCallRow[date] = ''; 
+      newRow[date] = { team: '', call: '' }; 
     });
-    updateStateAsync(setRosterTeamRowData, prev => [...prev, newTeamRow]);
-    updateStateAsync(setRosterCallRowData, prev => [...prev, newCallRow]);
+    
+    // Optimistically update frontend state
+    setRosterRowData(prev => [...prev, newRow]);
+
+    // Immediately notify the backend so the row is persisted on the server
+    try {
+      await fetch('http://localhost:8000/api/roster/add-row', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName })
+      });
+    } catch (err) {
+      console.error("Failed to persist new person row to backend:", err);
+    }
+  };
+
+  const onRosterNameChanged = async (event) => {
+    const { node, oldValue, newValue } = event;
+    if (oldValue === newValue) return;
+
+    setRosterRowData(prev => {
+      const updated = [...prev];
+      updated[node.rowIndex] = { ...node.data, name: newValue };
+      return updated;
+    });
+    queueCellUpdate('roster_name', node.rowIndex, 'name', newValue);
   };
 
   const triggerOptimizationModel = async () => {
@@ -527,10 +542,7 @@ export default function DynamicRosterGrid() {
       });
       const data = await res.json();
       
-      const stateRes = await fetch('http://localhost:8000/api/roster/state');
-      const stateData = await stateRes.json();
-      if (stateData.roster_team_row_data) updateStateAsync(setRosterTeamRowData, stateData.roster_team_row_data);
-      if (stateData.roster_call_row_data) updateStateAsync(setRosterCallRowData, stateData.roster_call_row_data);
+      loadBackendState();
 
       setSolveMessage(data.message || "Model execution completed successfully.");
     } catch (err) {
@@ -578,10 +590,10 @@ export default function DynamicRosterGrid() {
           <div className="flex items-center gap-2 mt-1">
             <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold ${
               isSaved 
-                ? 'bg-emerald-50 text-emerald-700' 
-                : 'bg-amber-50 text-amber-700'
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                : 'bg-amber-50 text-amber-700 border border-amber-200 animate-pulse'
             }`}>
-              {/* <span className={`w-2 h-2 rounded-full ${isSaved ? 'bg-emerald-500' : 'bg-amber-500'}`}></span> */}
+              <span className={`w-2 h-2 rounded-full ${isSaved ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
               {saveStatus}
             </span>
             {pendingCount > 0 && (
@@ -833,7 +845,7 @@ export default function DynamicRosterGrid() {
         <div ref={rosterWrapperRef} className="resize-y overflow-auto min-h-[100px] max-h-[600px]">
           <AgGridReact
             theme={customThemeBalham}
-            rowData={rosterGridRowData}
+            rowData={rosterRowData}
             columnDefs={rosterColumnDefs}
             defaultColDef={defaultColDef}
             suppressMovableColumns={true}
@@ -843,6 +855,11 @@ export default function DynamicRosterGrid() {
 
             onColumnResized={handleColumnResized}
             onCellKeyDown={handleCellKeyDown}
+            onCellValueChanged={(e) => {
+              if (e.column.getColId() === 'name') {
+                onRosterNameChanged(e);
+              }
+            }}
 
             cellSelection={{ handle: { mode: 'fill' } }}
             undoRedoCellEditing={true}  

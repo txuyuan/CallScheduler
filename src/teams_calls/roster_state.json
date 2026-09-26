@@ -298,7 +298,8 @@
             "name": "Person 3"
         },
         {
-            "name": "Person 4"
+            "name": "Person 4",
+            "2026-11-09": "ds"
         }
     ],
     "roster_call_row_data": [

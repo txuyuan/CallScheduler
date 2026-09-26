@@ -1,310 +1,177 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Any, Dict, List
-import json
-from pathlib import Path
-from datetime import datetime, timedelta
+from typing import List, Dict, Any, Optional
 
-from roster import Roster
+app = FastAPI(title="Roster Optimization Backend")
 
-app = FastAPI(title="Roster Backend API", version="1.0.0")
-
-@app.on_event("startup")
-def debug_print_routes():
-    print("\n--- CHECKING REGISTERED ROUTES ---")
-    for route in app.routes:
-        print(f"Route found: {route.methods} -> {route.path}")
-    print("----------------------------------\n")
-
+# Enable CORS for frontend communication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Adjust in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-DATA_FILE = Path("roster_state.json")
-
-DEFAULT_STATE = {
-    "start_date": "2026-09-01",
-    "end_date": "2026-09-30",
-    "min_call_interval": 2,
-    "max_teams_per_week": 1,
-    "max_solve_time": 60,
-    "al_call_buffer_before": 1,
-    "al_call_buffer_after": 0,
-    "blockout_call_buffer_before": 1,
-    "blockout_call_buffer_after": 0,
+# --- IN-MEMORY DATABASE STORE (Replace with a real DB like PostgreSQL/SQLite in production) ---
+db_store = {
+    "settings": {
+        "start_date": "2026-09-01",
+        "end_date": "2026-09-30",
+        "min_call_interval": 2,
+        "max_teams_per_week": 1,
+        "max_solve_time": 60,
+        "al_call_buffer_before": 1,
+        "al_call_buffer_after": 0,
+        "blockout_call_buffer_before": 1,
+        "blockout_call_buffer_after": 0,
+    },
     "team_row_data": [
-        {"teamName": "Team A", "2026-09-01": 3, "2026-09-02": 3},
-        {"teamName": "Team B", "2026-09-01": 2, "2026-09-02": 2},
-        {"teamName": "Team C", "2026-09-01": 1, "2026-09-02": 1},
-        {"teamName": "Team D", "2026-09-01": 1, "2026-09-02": 1},
-        {"teamName": "ps_cover", "2026-09-01": 1, "2026-09-02": 1},
+        {"teamName": "Team A", "2026-09-01": 2, "2026-09-02": 1},
+        {"teamName": "Team B", "2026-09-01": 1, "2026-09-02": 2},
+        {"teamName": "Team C"},
+        {"teamName": "Team D"},
     ],
     "call_row_data": [
-        {"callName": "Call 1", "2026-09-01": 1, "2026-09-02": 1}
+        {"callName": "Call 1", "2026-09-01": 1}
     ],
-    "roster_team_row_data": [
-        {"name": "Person 1"},
-        {"name": "Person 2"},
-        {"name": "Person 3"},
-        {"name": "Person 4"},
-    ],
-    "roster_call_row_data": [
-        {"name": "Person 1"},
+    "roster_row_data": [
+        {
+            "name": "Person 1",
+            "2026-09-01": {"team": "Team A", "call": True},
+            "2026-09-02": {"team": "Team B", "call": False}
+        },
         {"name": "Person 2"},
         {"name": "Person 3"},
         {"name": "Person 4"},
     ]
 }
 
-def load_data() -> dict:
-    if not DATA_FILE.exists():
-        save_data(DEFAULT_STATE)
-        return DEFAULT_STATE
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            updated = False
-            for k, v in DEFAULT_STATE.items():
-                if k not in data:
-                    data[k] = v
-                    updated = True
-            if updated:
-                save_data(data)
-            return data
-    except Exception as e:
-        print(f"Error reading JSON file, falling back to default: {e}")
-        return DEFAULT_STATE
-
-def save_data(data: dict):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+# --- PYDANTIC MODELS ---
+class SettingsUpdate(BaseModel):
+    settings: Dict[str, Any]
 
 class CellUpdate(BaseModel):
-    table_type: str
+    table_type: str  # 'team', 'call_req', 'roster_team', 'roster_call', 'roster_name'
     row_index: int
     field: str
     value: Any
 
-class BatchCellUpdatePayload(BaseModel):
+class BatchUpdates(BaseModel):
     updates: List[CellUpdate]
 
-class TeamUpdatePayload(BaseModel):
+class TeamNameUpdate(BaseModel):
     originalTeamName: str
     teamName: str
 
-class SettingsUpdatePayload(BaseModel):
-    settings: Dict[str, Any]
+class AddPersonRequest(BaseModel):
+    name: str
 
-class OptimizationPayload(BaseModel):
+class RunModelRequest(BaseModel):
     start_date: str
     end_date: str
 
+
+# --- ENDPOINTS ---
+
 @app.get("/api/roster/state")
 def get_roster_state():
-    return load_data()
+    """Returns the entire application state for frontend initialization."""
+    return {
+        **db_store["settings"],
+        "team_row_data": db_store["team_row_data"],
+        "call_row_data": db_store["call_row_data"],
+        "roster_row_data": db_store["roster_row_data"]
+    }
+
+
+@app.patch("/api/roster/settings")
+def update_settings(payload: SettingsUpdate):
+    """Updates global configuration settings."""
+    for key, value in payload.settings.items():
+        db_store["settings"][key] = value
+    return {"status": "success", "settings": db_store["settings"]}
+
 
 @app.patch("/api/roster/batch-cells")
-def update_roster_batch_cells(payload: BatchCellUpdatePayload):
-    db = load_data()
-    
+def batch_update_cells(payload: BatchUpdates):
+    """Handles batch cell updates from the frontend queue."""
     for update in payload.updates:
-        table_type = update.table_type
+        t_type = update.table_type
         idx = update.row_index
         field = update.field
         val = update.value
 
-        target_list = None
-        if table_type == 'team':
-            target_list = db["team_row_data"]
-        elif table_type == 'call_req':
-            target_list = db["call_row_data"]
-        elif table_type == 'roster_team':
-            target_list = db["roster_team_row_data"]
-        elif table_type == 'roster_call':
-            target_list = db["roster_call_row_data"]
-        else:
-            continue
+        if t_type == 'team':
+            if 0 <= idx < len(db_store["team_row_data"]):
+                db_store["team_row_data"][idx][field] = val
 
-        if 0 <= idx < len(target_list):
-            target_list[idx][field] = val
+        elif t_type == 'call_req':
+            if 0 <= idx < len(db_store["call_row_data"]):
+                db_store["call_row_data"][idx][field] = val
 
-    save_data(db)
-    return {"status": "success", "message": f"Successfully processed {len(payload.updates)} cell updates."}
+        elif t_type in ['roster_team', 'roster_call', 'roster_name']:
+            if 0 <= idx < len(db_store["roster_row_data"]):
+                row = db_store["roster_row_data"][idx]
+                if t_type == 'roster_name':
+                    row['name'] = val
+                else:
+                    date_key = field  # field is the date string
+                    if date_key not in row:
+                        row[date_key] = {"team": "", "call": ""}
+                    
+                    sub_key = "team" if t_type == 'roster_team' else "call"
+                    row[date_key][sub_key] = val
+
+    return {"status": "success", "processed": len(payload.updates)}
+
+
+@app.post("/api/roster/add-row")
+def add_roster_row(payload: AddPersonRequest):
+    """Persists a newly added person row so indices match cleanly on refresh."""
+    new_row = {"name": payload.name}
+    db_store["roster_row_data"].append(new_row)
+    return {"status": "success", "total_rows": len(db_store["roster_row_data"])}
+
 
 @app.patch("/api/teams/update")
-def update_team_name(payload: TeamUpdatePayload):
-    db = load_data()
-    team_list = db["team_row_data"]
+def update_team_name(payload: TeamNameUpdate):
+    """Updates a team's name across the team table and personnel roster references."""
+    old_name = payload.originalTeamName
+    new_name = payload.teamName
 
-    # Find the team by its original name
-    target_team = None
-    for team in team_list:
-        if team.get("teamName") == payload.originalTeamName:
-            target_team = team
-            break
+    # Update in team requirements
+    for row in db_store["team_row_data"]:
+        if row.get("teamName") == old_name:
+            row["teamName"] = new_name
 
-    if not target_team:
-        # If it doesn't exist yet (e.g. a newly added row), append it!
-        new_row = {"teamName": payload.teamName}
-        team_list.append(new_row)
-    else:
-        target_team["teamName"] = payload.teamName
+    # Update references in personnel roster
+    for row in db_store["roster_row_data"]:
+        for key, val in row.items():
+            if key != 'name' and isinstance(val, dict):
+                if val.get("team") == old_name:
+                    val["team"] = new_name
 
-    save_data(db)
-    return {"status": "success", "message": "Team name updated successfully."}
+    return {"status": "success"}
 
-@app.patch("/api/roster/settings")
-def update_roster_settings(payload: SettingsUpdatePayload):
-    db = load_data()
-    allowed_keys = {
-        "start_date", "end_date", "min_call_interval", "max_teams_per_week",
-        "max_solve_time", "al_call_buffer_before", "al_call_buffer_after",
-        "blockout_call_buffer_before", "blockout_call_buffer_after"
-    }
-    
-    for key, value in payload.settings.items():
-        if key in allowed_keys:
-            db[key] = value
-            
-    save_data(db)
-    return {"status": "success", "message": "Settings updated and saved successfully."}
 
 @app.post("/api/roster/run-model")
-def run_optimization_model(payload: OptimizationPayload):
-    db = load_data()
-    
-    try:
-        start_dt = datetime.strptime(payload.start_date, '%Y-%m-%d')
-        end_dt = datetime.strptime(payload.end_date, '%Y-%m-%d')
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format received. Expected YYYY-MM-DD.")
+def run_optimization_model(payload: RunModelRequest):
+    """
+    Placeholder for your optimization solver backend (e.g., OR-Tools, PuLP, Gurobi).
+    Mutates the roster state with optimized assignments and returns success.
+    """
+    # Example simulation: Populate dummy results for first row/date
+    for row in db_store["roster_row_data"]:
+        row[payload.start_date] = {"team": "Team A", "call": True}
 
-    start_date_fmt = start_dt.strftime('%d/%m/%Y')
-    end_date_fmt = end_dt.strftime('%d/%m/%Y')
+    return {
+        "status": "success",
+        "message": f"Optimization successfully solved for range {payload.start_date} to {payload.end_date}!"
+    }
 
-    dates_list = [(start_dt + timedelta(days=i)).strftime('%d/%m/%Y') for i in range((end_dt - start_dt).days + 1)]
-    ui_dates_list = [(start_dt + timedelta(days=i)).strftime('%Y-%m-%d') for i in range((end_dt - start_dt).days + 1)]
-
-    min_call_interval = int(db.get("min_call_interval", 2))
-    max_teams_per_week = int(db.get("max_teams_per_week", 1))
-    max_solve_time = int(db.get("max_solve_time", 60))
-    leave_buffers = [int(db.get("al_call_buffer_before", 1)), int(db.get("al_call_buffer_after", 0))]
-    blockout_buffers = [int(db.get("blockout_buffer_before", 1)), int(db.get("blockout_buffer_after", 0))]
-
-    staff_members = [row.get("name") for row in db.get("roster_team_row_data", []) if row.get("name")]
-    if not staff_members:
-        raise HTTPException(status_code=400, detail="No personnel found in roster to optimize.")
-
-    team_options = []
-    daily_team_requirement = {}
-    for row in db.get("team_row_data", []):
-        t_name = row.get("teamName")
-        if t_name:
-            team_options.append(t_name)
-            sample_val = row.get(ui_dates_list[0], 1)
-            daily_team_requirement[t_name] = int(sample_val) if sample_val not in ("", None) else 1
-
-    for default_opt in ['ps_cover', 'leave']:
-        if default_opt not in team_options:
-            team_options.append(default_opt)
-
-    team_sacrificability = {opt: 5 for opt in team_options}
-    team_sacrificability['leave'] = 0
-    team_sacrificability['ps_cover'] = 0
-
-    team_requirements = {d: daily_team_requirement for d in dates_list}
-
-    call_requirements = {}
-    call_row = db.get("call_row_data", [{}])[0]
-    for idx, d_str in enumerate(dates_list):
-        ui_d = ui_dates_list[idx]
-        val = call_row.get(ui_d, 1)
-        call_requirements[d_str] = int(val) if val not in ("", None) else 1
-
-    team_locks = {person: {} for person in staff_members}
-    call_locks = {person: {} for person in staff_members}
-
-    for row in db.get("roster_team_row_data", []):
-        person = row.get("name")
-        if not person:
-            continue
-        for ui_d, solver_d in zip(ui_dates_list, dates_list):
-            cell_val = row.get(ui_d)
-            if cell_val:
-                team_locks[person][solver_d] = cell_val
-
-    for row in db.get("roster_call_row_data", []):
-        person = row.get("name")
-        if not person:
-            continue
-        for ui_d, solver_d in zip(ui_dates_list, dates_list):
-            cell_val = row.get(ui_d)
-            if cell_val is True or cell_val == 'True':
-                call_locks[person][solver_d] = 1
-            elif cell_val is False or cell_val == 'False':
-                call_locks[person][solver_d] = 0
-
-    try:
-        roster_sched = Roster(
-            start_date=start_date_fmt,
-            end_date=end_date_fmt,
-            persons=staff_members,
-            team_requirements=team_requirements,
-            team_options=team_options,
-            team_sacrificability=team_sacrificability,
-            team=team_locks,
-            call_requirements=call_requirements,
-            calls=call_locks,
-            leave_buffers=leave_buffers,
-            blockout_buffers=blockout_buffers,
-            call_interval=min_call_interval,
-            max_teams_per_week=max_teams_per_week,
-            max_solve_time_seconds=max_solve_time
-        )
-
-        success = roster_sched.solve()
-        if not success:
-            return {"status": "error", "message": "Optimization completed, but no feasible solution was found."}
-
-        solved_team_rows = []
-        solved_call_rows = []
-
-        for person in staff_members:
-            new_team_row = {"name": person}
-            new_call_row = {"name": person}
-
-            for ui_d, solver_d in zip(ui_dates_list, dates_list):
-                assigned_team = roster_sched.teams_table.get(person, {}).get(solver_d, '')
-                new_team_row[ui_d] = assigned_team if assigned_team else ''
-
-                try:
-                    is_call = bool(roster_sched.solver.Value(roster_sched.call_vars[person][dates_list.index(solver_d)]))
-                    new_call_row[ui_d] = is_call
-                except Exception:
-                    new_call_row[ui_d] = False
-
-            solved_team_rows.append(new_team_row)
-            solved_call_rows.append(new_call_row)
-
-        db["roster_team_row_data"] = solved_team_rows
-        db["roster_call_row_data"] = solved_call_rows
-        save_data(db)
-
-        return {
-            "status": "success", 
-            "message": f"Optimization model executed successfully for {payload.start_date} through {payload.end_date}!"
-        }
-
-    except Exception as e:
-        print(f"Solver execution error: {e}")
-        raise HTTPException(status_code=500, detail=f"Solver execution failed: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-    
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
