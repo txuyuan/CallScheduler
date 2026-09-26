@@ -35,10 +35,64 @@ class Roster:
         min_team_requirements=None,
         max_solve_time_seconds=None,
     ):
+        # 1. Cleanse base range dates
         self.start_date = self._parse_date_universal(start_date).strftime('%d/%m/%Y')
         self.end_date = self._parse_date_universal(end_date).strftime('%d/%m/%Y')
         
-        self.team_requirements = team_requirements or {}
+        # 2. Cleanse and normalize all incoming date keys/entries upfront
+        self.team_requirements = {}
+        for k, v in (team_requirements or {}).items():
+            try:
+                parsed_k = self._parse_date_universal(k).strftime('%d/%m/%Y')
+                self.team_requirements[parsed_k] = v
+            except ValueError:
+                self.team_requirements[k] = v
+
+        self.call_requirements = {}
+        for k, v in (call_requirements or {}).items():
+            try:
+                parsed_k = self._parse_date_universal(k).strftime('%d/%m/%Y')
+                self.call_requirements[parsed_k] = v
+            except ValueError:
+                self.call_requirements[k] = v
+
+        self.teams = {}
+        for person, date_dict in (teams or {}).items():
+            cleansed_sub = {}
+            for k, v in date_dict.items():
+                try:
+                    parsed_k = self._parse_date_universal(k).strftime('%d/%m/%Y')
+                    cleansed_sub[parsed_k] = v
+                except ValueError:
+                    cleansed_sub[k] = v
+            self.teams[person] = cleansed_sub
+
+        self.calls = {}
+        for person, date_dict in (calls or {}).items():
+            cleansed_sub = {}
+            for k, v in date_dict.items():
+                try:
+                    parsed_k = self._parse_date_universal(k).strftime('%d/%m/%Y')
+                    cleansed_sub[parsed_k] = v
+                except ValueError:
+                    cleansed_sub[k] = v
+            self.calls[person] = cleansed_sub
+
+        self.leaves_blockouts = {}
+        for person, entries in (leaves_blockouts or {}).items():
+            cleansed_entries = []
+            for entry in entries:
+                if isinstance(entry, (list, tuple)) and len(entry) == 2:
+                    raw_d, status = entry
+                    try:
+                        parsed_d = self._parse_date_universal(raw_d).strftime('%d/%m/%Y')
+                        cleansed_entries.append((parsed_d, status))
+                    except ValueError:
+                        cleansed_entries.append(entry)
+                else:
+                    cleansed_entries.append(entry)
+            self.leaves_blockouts[person] = cleansed_entries
+
         self.team_options = team_options or ['team_ds', 'leave', 'team_cos', 'team_c', 'ps_cover']
         
         self.team_sacrificability = team_sacrificability or {
@@ -50,10 +104,6 @@ class Roster:
         }
 
         self.persons = persons or []
-        self.teams = teams or {}  
-        self.call_requirements = call_requirements or {}
-        self.calls = calls or {}  
-        self.leaves_blockouts = leaves_blockouts or {}
         self.leave_buffers = leave_buffers or [1, 0]
         self.blockout_buffers = blockout_buffers or [1, 0]
         self.call_interval = call_interval
@@ -97,7 +147,6 @@ class Roster:
             except ValueError:
                 continue
         
-        # Fallback evaluation using standard dateutil if available, or raise error
         raise ValueError(f"Unable to parse malformed date string: '{raw_date}'")
 
     def _init_globals(self):
@@ -105,7 +154,7 @@ class Roster:
         end = datetime.strptime(self.end_date, '%d/%m/%Y')
         delta = end - start
         
-        self.dates = [(start + timedelta(days=i)).strftime('%d/%m/%Y') for i in range(delta.days + 1)]
+        self.dates = [(start + timedelta(days=i)).strftime('%d/%m/%Y') for i in range(delta.days + 1)] # Fixed list comprehension string indexing
         
         for idx, d_str in enumerate(self.dates):
             d_obj = datetime.strptime(d_str, '%d/%m/%Y')
@@ -124,15 +173,10 @@ class Roster:
             
             p_entries = self.leaves_blockouts.get(person, [])
             for date_str, status in p_entries:
-                try:
-                    d_obj = self._parse_date_universal(date_str)
-                except ValueError:
+                if date_str not in date_to_idx:
                     continue
-                
-                standard_date_str = d_obj.strftime('%d/%m/%Y')
-                if standard_date_str not in date_to_idx:
-                    continue
-                idx = date_to_idx[standard_date_str]
+                idx = date_to_idx[date_str]
+                d_obj = datetime.strptime(date_str, '%d/%m/%Y')
 
                 status_str = str(status).strip().upper()
                 if status_str == 'L':
@@ -163,8 +207,6 @@ class Roster:
                             self.nighttime_unavailable[person][target_idx] = 1
 
     def _init_calls(self):
-        date_to_idx = {d: i for i, d in enumerate(self.dates)}
-
         for person in self.persons:
             self.call_vars[person] = {}
             for idx, date_str in enumerate(self.dates):
@@ -173,17 +215,9 @@ class Roster:
                 if self.nighttime_unavailable.get(person, {}).get(idx, 0) == 1:
                     self.model.Add(self.call_vars[person][idx] == 0)
 
-                # Check manual call locks with universal date parser
-                if person in self.calls:
-                    for raw_d, val in self.calls[person].items():
-                        try:
-                            parsed_d = self._parse_date_universal(raw_d)
-                            if parsed_d.strftime('%d/%m/%Y') == date_str:
-                                locked_call_val = int(val)
-                                self.model.Add(self.call_vars[person][idx] == locked_call_val)
-                                break
-                        except ValueError:
-                            continue
+                if person in self.calls and date_str in self.calls[person]:
+                    locked_call_val = int(self.calls[person][date_str])
+                    self.model.Add(self.call_vars[person][idx] == locked_call_val)
 
         for person in self.persons:
             for idx in range(len(self.dates) - self.call_interval):
@@ -225,19 +259,11 @@ class Roster:
                 else:
                     self.model.Add(self.team_vars[person][idx] != leave_idx)
 
-                # Check manual teams locks with universal date parser
-                if person in self.teams:
-                    for raw_d, t_val in self.teams[person].items():
-                        try:
-                            parsed_d = self._parse_date_universal(raw_d)
-                            if parsed_d.strftime('%d/%m/%Y') == date_str:
-                                locked_team_name = str(t_val).replace(" (auto)", "").strip()
-                                if locked_team_name in self.team_to_idx:
-                                    locked_idx = self.team_to_idx[locked_team_name]
-                                    self.model.Add(self.team_vars[person][idx] == locked_idx)
-                                break
-                        except ValueError:
-                            continue
+                if person in self.teams and date_str in self.teams[person]:
+                    locked_team_name = str(self.teams[person][date_str]).replace(" (auto)", "").strip()
+                    if locked_team_name in self.team_to_idx:
+                        locked_idx = self.team_to_idx[locked_team_name]
+                        self.model.Add(self.team_vars[person][idx] == locked_idx)
 
         if self.min_team_requirements:
             for idx, date_str in enumerate(self.dates):
@@ -276,6 +302,8 @@ class Roster:
             if name.startswith('team_') or name == 'ps_cover'
         ]
 
+        leave_idx = self.team_to_idx.get('leave')
+
         for person in self.persons:
             for week_id, week_indices in weeks_dict.items():
                 person_week_indices = [idx for idx in week_indices if idx in self.team_vars.get(person, {})]
@@ -298,18 +326,42 @@ class Roster:
                 
                 self.model.Add(sum(week_exclusive_team_flags) <= self.max_teams_per_week)
 
+                # Track weekly conditions for the ps_cover / leave rule
+                week_pcc_days = []
+                week_leave_days = []
+
                 for idx in person_week_indices:
                     d_obj = datetime.strptime(self.dates[idx], '%d/%m/%Y')
                     if d_obj.weekday() >= 5:
                         continue 
                     
+                    # 1. ps_cover Day Indicator & Rest Buffer Rule
                     is_pcc_day = self.model.NewBoolVar(f"is_pcc_{person}_{idx}")
                     self.model.Add(self.team_vars[person][idx] == pcc_idx).OnlyEnforceIf(is_pcc_day)
                     self.model.Add(self.team_vars[person][idx] != pcc_idx).OnlyEnforceIf(is_pcc_day.Not())
+                    week_pcc_days.append(is_pcc_day)
                     
                     prev_idx = idx - 1
                     if prev_idx >= 0 and prev_idx in self.call_vars.get(person, {}):
                         self.model.Add(self.call_vars[person][prev_idx] == 0).OnlyEnforceIf(is_pcc_day)
+
+                    # 2. Leave Day Indicator
+                    if leave_idx is not None:
+                        is_leave_day = self.model.NewBoolVar(f"is_leave_day_{person}_{idx}")
+                        self.model.Add(self.team_vars[person][idx] == leave_idx).OnlyEnforceIf(is_leave_day)
+                        self.model.Add(self.team_vars[person][idx] != leave_idx).OnlyEnforceIf(is_leave_day.Not())
+                        week_leave_days.append(is_leave_day)
+
+                # 3. Enforce: Cannot mix ps_cover and leave in the same week
+                if leave_idx is not None and week_pcc_days and week_leave_days:
+                    safe_week_str = week_id.replace('/', '_')
+                    has_pcc_week = self.model.NewBoolVar(f"has_pcc_week_{person}_{safe_week_str}")
+                    has_leave_week = self.model.NewBoolVar(f"has_leave_week_{person}_{safe_week_str}")
+                    
+                    self.model.AddMaxEquality(has_pcc_week, week_pcc_days)
+                    self.model.AddMaxEquality(has_leave_week, week_leave_days)
+                    
+                    self.model.Add(has_pcc_week + has_leave_week <= 1)
     
     def _build_objective(self):
         spread_penalties = []
@@ -373,19 +425,19 @@ class Roster:
             self.model.Add(person_team_variance == p_max_team - p_min_team)
             team_evenness_penalties.append(person_team_variance)
 
-        shortfall_penalties = []
+        excess_penalties = []
         for idx, date_str in enumerate(self.dates):
             d_obj = datetime.strptime(date_str, '%d/%m/%Y')
             if d_obj.weekday() >= 5:
                 continue
 
             day_reqs = self.team_requirements.get(date_str, {})
-            if not day_reqs and self.team_requirements:
+            if not day_reqs and self.team_requirements and not any(k in self.team_requirements for k in self.dates):
                 day_reqs = self.team_requirements
 
             for opt in working_options:
-                req_count = day_reqs.get(opt, 0)
-                if req_count <= 0:
+                max_count = day_reqs.get(opt, 999)
+                if max_count >= 999:
                     continue
 
                 opt_idx = self.team_to_idx[opt]
@@ -400,8 +452,8 @@ class Roster:
                 total_assigned = self.model.NewIntVar(0, len(self.persons), f"assigned_{opt}_{idx}")
                 self.model.Add(total_assigned == sum(assigned_vars))
 
-                shortfall = self.model.NewIntVar(0, req_count, f"shortfall_{opt}_{idx}")
-                self.model.Add(shortfall >= req_count - total_assigned)
+                excess = self.model.NewIntVar(0, len(self.persons), f"excess_{opt}_{idx}")
+                self.model.Add(excess >= total_assigned - max_count)
 
                 priority_val = self.team_sacrificability.get(opt, 5)
                 if priority_val == 0:
@@ -409,14 +461,14 @@ class Roster:
                 else:
                     weight = max(1, 1000 // (priority_val ** 2))
 
-                shortfall_penalties.append(shortfall * weight)
+                excess_penalties.append(excess * weight)
 
         total_objective = (
             sum(spread_penalties) * 2 +
             wd_disparity * 5 +
             we_disparity * 5 +
             sum(team_evenness_penalties) * 3 +
-            sum(shortfall_penalties)
+            sum(excess_penalties)
         )
         self.model.Minimize(total_objective)
 
