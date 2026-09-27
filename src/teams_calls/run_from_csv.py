@@ -19,23 +19,13 @@ def main():
     
     team_sacrificability = {
         'team_subobs': 12, 
-        'team_ds': 14, 
-        'team_9ab': 5,
+        'team_ds': 16, 
+        'team_9ab': 4,
         'team_b1': 1,
         'team_bg': 1,
         'team_go': 1, 
         'ps_cover': 0,
         'leave': 0,
-    }
-
-    daily_team_requirement = {
-        'team_subobs': 3,
-        'team_ds': 2,
-        'team_9ab': 2,
-        'team_b1': 1,
-        'team_bg': 1,
-        'team_go': 1,
-        'ps_cover': 1
     }
 
     min_team_requirements = {
@@ -45,6 +35,7 @@ def main():
         'team_b1': 1,
         'team_bg': 1,
         'team_go': 1,
+        'ps_cover': 1
     }
 
     staff_members = [

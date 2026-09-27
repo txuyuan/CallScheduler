@@ -130,7 +130,6 @@ class Roster:
         self.initialise()
 
     def _parse_date_universal(self, raw_date):
-        """Attempts to parse a date string using multiple flexible formats, supporting non-zero padding and 2/4 digit years."""
         if isinstance(raw_date, datetime):
             return raw_date
         
@@ -154,7 +153,7 @@ class Roster:
         end = datetime.strptime(self.end_date, '%d/%m/%Y')
         delta = end - start
         
-        self.dates = [(start + timedelta(days=i)).strftime('%d/%m/%Y') for i in range(delta.days + 1)] # Fixed list comprehension string indexing
+        self.dates = [(start + timedelta(days=i)).strftime('%d/%m/%Y') for i in range(delta.days + 1)]
         
         for idx, d_str in enumerate(self.dates):
             d_obj = datetime.strptime(d_str, '%d/%m/%Y')
@@ -297,11 +296,6 @@ class Roster:
             week_id = monday_obj.strftime('%d/%m/%Y')
             weeks_dict.setdefault(week_id, []).append(idx)
 
-        exclusive_team_indices = [
-            i for i, name in enumerate(self.team_options) 
-            if name.startswith('team_') or name == 'ps_cover'
-        ]
-
         leave_idx = self.team_to_idx.get('leave')
 
         for person in self.persons:
@@ -309,24 +303,7 @@ class Roster:
                 person_week_indices = [idx for idx in week_indices if idx in self.team_vars.get(person, {})]
                 if not person_week_indices:
                     continue
-                
-                week_exclusive_team_flags = []
-                for t_idx in exclusive_team_indices:
-                    t_assigned_vars = []
-                    for idx in person_week_indices:
-                        is_this_team = self.model.NewBoolVar(f"is_team_{person}_{idx}_{t_idx}")
-                        self.model.Add(self.team_vars[person][idx] == t_idx).OnlyEnforceIf(is_this_team)
-                        self.model.Add(self.team_vars[person][idx] != t_idx).OnlyEnforceIf(is_this_team.Not())
-                        t_assigned_vars.append(is_this_team)
-                    
-                    safe_week_str = week_id.replace('/', '_')
-                    team_used_this_week = self.model.NewBoolVar(f"used_team_{person}_{safe_week_str}_{t_idx}")
-                    self.model.AddMaxEquality(team_used_this_week, t_assigned_vars)
-                    week_exclusive_team_flags.append(team_used_this_week)
-                
-                self.model.Add(sum(week_exclusive_team_flags) <= self.max_teams_per_week)
 
-                # Track weekly conditions for the ps_cover / leave rule
                 week_pcc_days = []
                 week_leave_days = []
 
@@ -335,7 +312,6 @@ class Roster:
                     if d_obj.weekday() >= 5:
                         continue 
                     
-                    # 1. ps_cover Day Indicator & Rest Buffer Rule
                     is_pcc_day = self.model.NewBoolVar(f"is_pcc_{person}_{idx}")
                     self.model.Add(self.team_vars[person][idx] == pcc_idx).OnlyEnforceIf(is_pcc_day)
                     self.model.Add(self.team_vars[person][idx] != pcc_idx).OnlyEnforceIf(is_pcc_day.Not())
@@ -345,14 +321,12 @@ class Roster:
                     if prev_idx >= 0 and prev_idx in self.call_vars.get(person, {}):
                         self.model.Add(self.call_vars[person][prev_idx] == 0).OnlyEnforceIf(is_pcc_day)
 
-                    # 2. Leave Day Indicator
                     if leave_idx is not None:
                         is_leave_day = self.model.NewBoolVar(f"is_leave_day_{person}_{idx}")
                         self.model.Add(self.team_vars[person][idx] == leave_idx).OnlyEnforceIf(is_leave_day)
                         self.model.Add(self.team_vars[person][idx] != leave_idx).OnlyEnforceIf(is_leave_day.Not())
                         week_leave_days.append(is_leave_day)
 
-                # 3. Enforce: Cannot mix ps_cover and leave in the same week
                 if leave_idx is not None and week_pcc_days and week_leave_days:
                     safe_week_str = week_id.replace('/', '_')
                     has_pcc_week = self.model.NewBoolVar(f"has_pcc_week_{person}_{safe_week_str}")
@@ -400,7 +374,6 @@ class Roster:
                 self.model.Add(m_sum == sum(person_calls[idx] for idx in m_indices if idx in person_calls))
                 person_monthly_sums.append(m_sum)
             
-            # A. Monthly Equity (busiest vs quietest month)
             if person_monthly_sums:
                 m_max = self.model.NewIntVar(0, len(self.dates), f"m_max_{person}")
                 m_min = self.model.NewIntVar(0, len(self.dates), f"m_min_{person}")
@@ -411,7 +384,6 @@ class Roster:
                 self.model.Add(monthly_equity_variance == m_max - m_min)
                 monthly_equity_penalties.append(monthly_equity_variance)
 
-            # B. Monthly Smoothing (penalize sharp spikes/drops between adjacent months)
             for i in range(len(person_monthly_sums) - 1):
                 diff = self.model.NewIntVar(-len(self.dates), len(self.dates), f"diff_{person}_{i}")
                 abs_diff = self.model.NewIntVar(0, len(self.dates), f"abs_diff_{person}_{i}")
@@ -443,11 +415,9 @@ class Roster:
 
                 if call_var is not None:
                     if is_unavailable == 1:
-                        # If unavailable/blockout, it's treated as forced rest/off
                         self.model.Add(is_rest_day == 1)
                         self.model.Add(is_working_day == 0)
                     else:
-                        # Rest day means no call assigned
                         self.model.Add(call_var == 0).OnlyEnforceIf(is_rest_day)
                         self.model.Add(call_var != 0).OnlyEnforceIf(is_rest_day.Not())
                         self.model.Add(call_var == 1).OnlyEnforceIf(is_working_day)
@@ -456,55 +426,65 @@ class Roster:
                     self.model.Add(is_rest_day == 1)
                     self.model.Add(is_working_day == 0)
 
-                # tmp = prev_rest + 1
                 tmp = self.model.NewIntVar(0, num_days + 1, f"rest_tmp_{person}_{day}")
                 self.model.Add(tmp == prev_rest + 1)
                 
-                # new_rest = tmp * is_rest_day
                 new_rest = self.model.NewIntVar(0, num_days + 1, f"rest_{person}_{day}")
                 self.model.AddMultiplicationEquality(new_rest, [tmp, is_rest_day])
 
-                # gap_weighted = prev_rest * is_working_day
                 gap_weighted = self.model.NewIntVar(0, num_days + 1, f"gap_{person}_{day}")
                 self.model.AddMultiplicationEquality(gap_weighted, [prev_rest, is_working_day])
                 gaps.append(gap_weighted)
 
                 prev_rest = new_rest
 
-            gaps.append(prev_rest)  # trailing rest period at the end of the horizon
+            gaps.append(prev_rest)
 
             largest_gap = self.model.NewIntVar(0, num_days + 1, f"max_gap_{person}")
             self.model.AddMaxEquality(largest_gap, gaps)
             largest_gaps.append(largest_gap)
 
         # ==========================================
-        # 4. GLOBAL: Weekday/Weekend & Team Evenness
+        # 4. GLOBAL: Weekday/Weekend & Team Evenness & Weekly Team Penalties
         # ==========================================
         staff_weekday_sums = []
         staff_weekend_sums = []
+        staff_total_calls = []  # <--- Added for total call disparity
+        
         for person in self.persons:
             wd_sum = self.model.NewIntVar(0, len(self.dates), f"wd_sum_{person}")
             we_sum = self.model.NewIntVar(0, len(self.dates), f"we_sum_{person}")
+            total_sum = self.model.NewIntVar(0, len(self.dates), f"total_calls_{person}") # <--- Added
+            
             self.model.Add(wd_sum == sum(self.call_vars[person][idx] for idx in self.weekday_chunks if idx in self.call_vars[person]))
             self.model.Add(we_sum == sum(self.call_vars[person][idx] for idx in self.weekend_chunks if idx in self.call_vars[person]))
+            self.model.Add(total_sum == sum(self.call_vars[person][idx] for idx in range(len(self.dates)) if idx in self.call_vars[person])) # <--- Added
+            
             staff_weekday_sums.append(wd_sum)
             staff_weekend_sums.append(we_sum)
+            staff_total_calls.append(total_sum) # <--- Added
 
         max_wd = self.model.NewIntVar(0, len(self.dates), "max_wd")
         min_wd = self.model.NewIntVar(0, len(self.dates), "min_wd")
         max_we = self.model.NewIntVar(0, len(self.dates), "max_we")
         min_we = self.model.NewIntVar(0, len(self.dates), "min_we")
+        max_total = self.model.NewIntVar(0, len(self.dates), "max_total_calls") # <--- Added
+        min_total = self.model.NewIntVar(0, len(self.dates), "min_total_calls") # <--- Added
         
         self.model.AddMaxEquality(max_wd, staff_weekday_sums)
         self.model.AddMinEquality(min_wd, staff_weekday_sums)
         self.model.AddMaxEquality(max_we, staff_weekend_sums)
         self.model.AddMinEquality(min_we, staff_weekend_sums)
+        self.model.AddMaxEquality(max_total, staff_total_calls)     # <--- Added
+        self.model.AddMinEquality(min_total, staff_total_calls)     # <--- Added
 
         wd_disparity = self.model.NewIntVar(0, len(self.dates), "wd_disparity")
         we_disparity = self.model.NewIntVar(0, len(self.dates), "we_disparity")
+        total_call_disparity = self.model.NewIntVar(0, len(self.dates), "total_call_disparity") # <--- Added
         
         self.model.Add(wd_disparity == max_wd - min_wd)
         self.model.Add(we_disparity == max_we - min_we)
+        self.model.Add(total_call_disparity == max_total - min_total) # <--- Added
 
         team_evenness_penalties = []
         working_options = [opt for opt in self.team_options if opt != 'leave']
@@ -532,6 +512,48 @@ class Roster:
             person_team_variance = self.model.NewIntVar(0, len(self.dates), f"team_var_{person}")
             self.model.Add(person_team_variance == p_max_team - p_min_team)
             team_evenness_penalties.append(person_team_variance)
+
+        weeks_dict = {}
+        for idx, date_str in enumerate(self.dates):
+            d_obj = datetime.strptime(date_str, '%d/%m/%Y')
+            if not self.persons or idx not in self.team_vars.get(self.persons[0], {}):
+                continue
+            monday_obj = d_obj - timedelta(days=d_obj.weekday())
+            week_id = monday_obj.strftime('%d/%m/%Y')
+            weeks_dict.setdefault(week_id, []).append(idx)
+
+        exclusive_team_indices = [
+            i for i, name in enumerate(self.team_options) 
+            if name.startswith('team_') or name == 'ps_cover'
+        ]
+
+        weekly_team_penalties = []
+        for person in self.persons:
+            for week_id, week_indices in weeks_dict.items():
+                person_week_indices = [idx for idx in week_indices if idx in self.team_vars.get(person, {})]
+                if not person_week_indices:
+                    continue
+                
+                week_exclusive_team_flags = []
+                for t_idx in exclusive_team_indices:
+                    t_assigned_vars = []
+                    for idx in person_week_indices:
+                        is_this_team = self.model.NewBoolVar(f"is_team_{person}_{idx}_{t_idx}")
+                        self.model.Add(self.team_vars[person][idx] == t_idx).OnlyEnforceIf(is_this_team)
+                        self.model.Add(self.team_vars[person][idx] != t_idx).OnlyEnforceIf(is_this_team.Not())
+                        t_assigned_vars.append(is_this_load := is_this_team) # simplified naming internally
+                    
+                    safe_week_str = week_id.replace('/', '_')
+                    team_used_this_week = self.model.NewBoolVar(f"used_team_{person}_{safe_week_str}_{t_idx}")
+                    self.model.AddMaxEquality(team_used_this_week, t_assigned_vars)
+                    week_exclusive_team_flags.append(team_used_this_week)
+                
+                sum_teams_var = self.model.NewIntVar(0, len(exclusive_team_indices), f"sum_teams_{person}_{week_id.replace('/', '_')}")
+                self.model.Add(sum_teams_var == sum(week_exclusive_team_flags))
+
+                excess_team_var = self.model.NewIntVar(0, len(exclusive_team_indices), f"excess_team_{person}_{week_id.replace('/', '_')}")
+                self.model.Add(excess_team_var >= sum_teams_var - 1)
+                weekly_team_penalties.append(excess_team_var)
 
         # ==========================================
         # 5. EXCESS REQUIREMENTS PENALTIES
@@ -578,13 +600,15 @@ class Roster:
         # COMBINED OBJECTIVE WEIGHTS
         # ==========================================
         total_objective = (
-            sum(spread_penalties) * 2 +                  # 7-day rolling window
-            sum(monthly_equity_penalties) * 4 +          # Monthly max/min variance
-            sum(monthly_smoothing_penalties) * 3 +       # Month-to-month transition smoothness
+            sum(spread_penalties) * 1 +                  # 7-day rolling window call spread
+            sum(monthly_equity_penalties) * 1 +          # Monthly max/min variance call spread
+            sum(monthly_smoothing_penalties) * 1 +       # Month-to-month transition smoothness call spread
             sum(largest_gaps) * 2 +                      # Gap minimization between shifts
-            wd_disparity * 5 +                           # Weekday parity across horizon
-            we_disparity * 5 +                           # Weekend parity across horizon
-            sum(team_evenness_penalties) * 3 +           # Team workload balance
+            wd_disparity * 8 +                          # Weekday parity
+            we_disparity * 8 +                          # Weekend parity
+            total_call_disparity * 15 +                  # Total call parity
+            sum(team_evenness_penalties) * 2 +           # Team workload balance
+            sum(weekly_team_penalties) * 10 +            # Minimize multiple teams per week (ideal is 1)
             sum(excess_penalties)                        # Meeting staffing targets safely
         )
         self.model.Minimize(total_objective)
