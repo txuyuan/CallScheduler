@@ -557,6 +557,7 @@ class Roster:
                 weekly_team_penalties.append(excess_team_var)
 
         shittiness_window_penalties = []
+        staff_total_shittiness = []
         window_size = 14
         
         if self.team_shittiness:
@@ -564,9 +565,11 @@ class Roster:
             max_shith = max(team_shith_map) if team_shith_map else 0
 
             if max_shith > 0:
+                max_possible_total_shith = max_shith * len(self.dates)
                 for person in self.persons:
                     person_team_vars = self.team_vars.get(person, {})
                     day_shittiness = {}
+                    person_daily_shvars = []
                     
                     for idx in range(len(self.dates)):
                         if idx in person_team_vars:
@@ -576,6 +579,12 @@ class Roster:
                         else:
                             s_var = self.model.NewIntVar(0, 0, f"shittiness_{person}_{idx}")
                             day_shittiness[idx] = s_var
+                        person_daily_shvars.append(s_var)
+
+                    # Total shittiness sum per person
+                    person_total_shith = self.model.NewIntVar(0, max_possible_total_shith, f"total_shittiness_{person}")
+                    self.model.Add(person_total_shith == sum(person_daily_shvars))
+                    staff_total_shittiness.append(person_total_shith)
 
                     for idx in range(len(self.dates) - window_size + 1):
                         window_vars = [day_shittiness[idx + offset] for offset in range(window_size) if (idx + offset) in day_shittiness]
@@ -583,6 +592,18 @@ class Roster:
                             window_sum = self.model.NewIntVar(0, max_shith * window_size, f"shith_window_{person}_{idx}")
                             self.model.Add(window_sum == sum(window_vars))
                             shittiness_window_penalties.append(window_sum)
+
+        # Compute total shittiness disparity across staff members
+        max_total_shith = self.model.NewIntVar(0, len(self.dates) * 100, "max_total_shith")
+        min_total_shith = self.model.NewIntVar(0, len(self.dates) * 100, "min_total_shith")
+        shittiness_disparity = self.model.NewIntVar(0, len(self.dates) * 100, "shittiness_disparity")
+
+        if staff_total_shittiness:
+            self.model.AddMaxEquality(max_total_shith, staff_total_shittiness)
+            self.model.AddMinEquality(min_total_shith, staff_total_shittiness)
+            self.model.Add(shittiness_disparity == max_total_shith - min_total_shith)
+        else:
+            self.model.Add(shittiness_disparity == 0)
 
         # ==========================================
         # DIMENSION INITIALIZATIONS FOR NORMALIZATION
@@ -626,7 +647,8 @@ class Roster:
             total_call_disparity * scale_D * 15 +                  
             sum(team_evenness_penalties) * scale_P * 2 +           
             sum(weekly_team_penalties) * scale_PW * 10 +           
-            sum(shittiness_window_penalties) * scale_PD * 3        
+            sum(shittiness_window_penalties) * scale_PD * 4 +      
+            shittiness_disparity * scale_D * 12
         )
         self.model.Minimize(total_objective)
 
