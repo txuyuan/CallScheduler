@@ -19,8 +19,8 @@ def main():
     
     team_sacrificability = {
         'team_subobs': 12, 
-        'team_ds': 16, 
-        'team_9ab': 4,
+        'team_ds': 15, 
+        'team_9ab': 2,
         'team_b1': 1,
         'team_bg': 1,
         'team_go': 1, 
@@ -29,9 +29,9 @@ def main():
     }
 
     min_team_requirements = {
-        'team_subobs': 1,
+        'team_subobs': 2,
         'team_ds': 1,
-        'team_9ab': 1,
+        'team_9ab': 2,
         'team_b1': 1,
         'team_bg': 1,
         'team_go': 1,
