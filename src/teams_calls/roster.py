@@ -18,8 +18,7 @@ class ObjectiveLogger(cp_model.CpSolverSolutionCallback):
 class Roster:
     def __init__(
         self,
-        start_date='01/01/2026',
-        end_date='31/01/2026',
+        dates=None,
         persons=None,
         team_requirements=None,
         team_options=None,
@@ -31,14 +30,13 @@ class Roster:
         leave_buffers=None,
         blockout_buffers=None,
         min_call_interval=2,
-        max_teams_per_week=1,
         team_requirements_min=None,
         team_shittiness=None,
         max_solve_time_seconds=None,
     ):
-        # 1. Cleanse base range dates
-        self.start_date = self._parse_date_universal(start_date).strftime('%d/%m/%Y')
-        self.end_date = self._parse_date_universal(end_date).strftime('%d/%m/%Y')
+        # 1. Cleanse incoming date array
+        raw_dates = dates or []
+        self.dates = [self._parse_date_universal(d).strftime('%d/%m/%Y') for d in raw_dates]
         
         # 2. Cleanse and normalize all incoming date keys/entries upfront
         self.team_requirements = {}
@@ -95,16 +93,12 @@ class Roster:
             self.leaves_blockouts[person] = cleansed_entries
 
         self.team_options = team_options or []
-        
         self.team_sacrificability = team_sacrificability or {}
-
         self.team_shittiness = team_shittiness or {}
-
         self.persons = persons or []
         self.leave_buffers = leave_buffers or [1, 0]
         self.blockout_buffers = blockout_buffers or [1, 0]
         self.min_call_interval = min_call_interval
-        self.max_teams_per_week = max_teams_per_week
         self.team_requirements_min = team_requirements_min or {}
 
         self.team_to_idx = {opt: i for i, opt in enumerate(self.team_options)}
@@ -112,7 +106,6 @@ class Roster:
 
         self.model = None
         self.solver = None
-        self.dates = []
         self.weekday_chunks = []
         self.weekend_chunks = []
         
@@ -133,7 +126,6 @@ class Roster:
         cleaned = str(raw_date).strip()
         formats = (
             '%d/%m/%Y', '%d/%m/%y', '%d-%m-%Y', '%d-%m-%y',
-            '%d/%m/Y', '%d/%m/y', '%d-%m/Y', '%d-%m/y',
             '%Y-%m-%d', '%y-%m-%d', '%Y/%m/%d', '%y/%m/%d'
         )
         
@@ -146,12 +138,7 @@ class Roster:
         raise ValueError(f"Unable to parse malformed date string: '{raw_date}'")
 
     def _init_globals(self):
-        start = datetime.strptime(self.start_date, '%d/%m/%Y')
-        end = datetime.strptime(self.end_date, '%d/%m/%Y')
-        delta = end - start
-        
-        self.dates = [(start + timedelta(days=i)).strftime('%d/%m/%Y') for i in range(delta.days + 1)]
-        
+        # Directly evaluate chunks using the passed-in dates array
         for idx, d_str in enumerate(self.dates):
             d_obj = datetime.strptime(d_str, '%d/%m/%Y')
             if d_obj.weekday() < 5:
@@ -179,17 +166,17 @@ class Roster:
                     self.daytime_unavailable[person][idx] = 1
 
                     pre, post = self.leave_buffers[0], self.leave_buffers[1]
-                    for offset in range(-pre, post + 1): # implement AL buffer
+                    for offset in range(-pre, post + 1):
                         target_idx = idx + offset
                         if 0 <= target_idx < len(self.dates):
                             self.nighttime_unavailable[person][target_idx] = 1
 
-                    if d_obj.weekday() == 0:  # Monday => block preceding weekend (Sat, Sun)
+                    if d_obj.weekday() == 0:  # Monday => block preceding weekend
                         for offset in range(-2, 0):
                             target_idx = idx + offset
                             if 0 <= target_idx < len(self.dates):
                                 self.nighttime_unavailable[person][target_idx] = 1
-                    elif d_obj.weekday() == 4:  # Friday => block following weekend (Sat, Sun)
+                    elif d_obj.weekday() == 4:  # Friday => block following weekend
                         for offset in range(1, 3):  
                             target_idx = idx + offset
                             if 0 <= target_idx < len(self.dates):
@@ -197,7 +184,7 @@ class Roster:
 
                 elif status_str == 'B':
                     pre, post = self.blockout_buffers[0], self.blockout_buffers[1]
-                    for offset in range(-pre, post + 1): # implement blockout buffer
+                    for offset in range(-pre, post + 1):
                         target_idx = idx + offset
                         if 0 <= target_idx < len(self.dates):
                             self.nighttime_unavailable[person][target_idx] = 1
@@ -261,7 +248,7 @@ class Roster:
                         locked_idx = self.team_to_idx[locked_team_name]
                         self.model.Add(self.team_vars[person][idx] == locked_idx)
 
-        # team_requirements as maximum constraint
+        # team_requirements constraints
         working_options = [opt for opt in self.team_options if opt != 'leave']
         for idx, date_str in enumerate(self.dates):
             d_obj = datetime.strptime(date_str, '%d/%m/%Y')
@@ -289,7 +276,7 @@ class Roster:
                 if assigned_vars:
                     self.model.Add(sum(assigned_vars) <= max_count)
 
-        # team_requirements_min
+        # team_requirements_min constraints
         for idx, date_str in enumerate(self.dates):
             d_obj = datetime.strptime(date_str, '%d/%m/%Y')
             if d_obj.weekday() >= 5:
@@ -363,9 +350,6 @@ class Roster:
                     self.model.Add(has_pcc_week + has_leave_week <= 1)
     
     def _build_objective(self):
-        # ==========================================
-        # 1. SHORT-TERM: 7-Day Rolling Window Spread
-        # ==========================================
         spread_penalties = []
         for person in self.persons:
             person_calls = self.call_vars.get(person, {})
@@ -376,9 +360,6 @@ class Roster:
                     self.model.Add(excess_calls == sum(window_calls))
                     spread_penalties.append(excess_calls)
 
-        # ==========================================
-        # 2. LONG-TERM: Calendar-Month Equity & Smoothing
-        # ==========================================
         months_dict = {}
         for idx, date_str in enumerate(self.dates):
             d_obj = datetime.strptime(date_str, '%d/%m/%Y')
@@ -417,9 +398,6 @@ class Roster:
                 self.model.AddAbsEquality(abs_diff, diff)
                 monthly_smoothing_penalties.append(abs_diff)
 
-        # ==========================================
-        # 3. SEQUENTIAL: Gap-Between-Calls Minimization
-        # ==========================================
         largest_gaps = []
         num_days = len(self.dates)
 
@@ -469,47 +447,44 @@ class Roster:
             self.model.AddMaxEquality(largest_gap, gaps)
             largest_gaps.append(largest_gap)
 
-        # ==========================================
-        # 4. GLOBAL: Weekday/Weekend & Team Evenness & Weekly Team Penalties
-        # ==========================================
         staff_weekday_sums = []
         staff_weekend_sums = []
-        staff_total_calls = []  # <--- Added for total call disparity
+        staff_total_calls = []
         
         for person in self.persons:
             wd_sum = self.model.NewIntVar(0, len(self.dates), f"wd_sum_{person}")
             we_sum = self.model.NewIntVar(0, len(self.dates), f"we_sum_{person}")
-            total_sum = self.model.NewIntVar(0, len(self.dates), f"total_calls_{person}") # <--- Added
+            total_sum = self.model.NewIntVar(0, len(self.dates), f"total_calls_{person}")
             
             self.model.Add(wd_sum == sum(self.call_vars[person][idx] for idx in self.weekday_chunks if idx in self.call_vars[person]))
             self.model.Add(we_sum == sum(self.call_vars[person][idx] for idx in self.weekend_chunks if idx in self.call_vars[person]))
-            self.model.Add(total_sum == sum(self.call_vars[person][idx] for idx in range(len(self.dates)) if idx in self.call_vars[person])) # <--- Added
+            self.model.Add(total_sum == sum(self.call_vars[person][idx] for idx in range(len(self.dates)) if idx in self.call_vars[person]))
             
             staff_weekday_sums.append(wd_sum)
             staff_weekend_sums.append(we_sum)
-            staff_total_calls.append(total_sum) # <--- Added
+            staff_total_calls.append(total_sum)
 
         max_wd = self.model.NewIntVar(0, len(self.dates), "max_wd")
         min_wd = self.model.NewIntVar(0, len(self.dates), "min_wd")
         max_we = self.model.NewIntVar(0, len(self.dates), "max_we")
         min_we = self.model.NewIntVar(0, len(self.dates), "min_we")
-        max_total = self.model.NewIntVar(0, len(self.dates), "max_total_calls") # <--- Added
-        min_total = self.model.NewIntVar(0, len(self.dates), "min_total_calls") # <--- Added
+        max_total = self.model.NewIntVar(0, len(self.dates), "max_total_calls")
+        min_total = self.model.NewIntVar(0, len(self.dates), "min_total_calls")
         
         self.model.AddMaxEquality(max_wd, staff_weekday_sums)
         self.model.AddMinEquality(min_wd, staff_weekday_sums)
         self.model.AddMaxEquality(max_we, staff_weekend_sums)
         self.model.AddMinEquality(min_we, staff_weekend_sums)
-        self.model.AddMaxEquality(max_total, staff_total_calls)     # <--- Added
-        self.model.AddMinEquality(min_total, staff_total_calls)     # <--- Added
+        self.model.AddMaxEquality(max_total, staff_total_calls)
+        self.model.AddMinEquality(min_total, staff_total_calls)
 
         wd_disparity = self.model.NewIntVar(0, len(self.dates), "wd_disparity")
         we_disparity = self.model.NewIntVar(0, len(self.dates), "we_disparity")
-        total_call_disparity = self.model.NewIntVar(0, len(self.dates), "total_call_disparity") # <--- Added
+        total_call_disparity = self.model.NewIntVar(0, len(self.dates), "total_call_disparity")
         
         self.model.Add(wd_disparity == max_wd - min_wd)
         self.model.Add(we_disparity == max_we - min_we)
-        self.model.Add(total_call_disparity == max_total - min_total) # <--- Added
+        self.model.Add(total_call_disparity == max_total - min_total)
 
         team_evenness_penalties = []
         working_options = [opt for opt in self.team_options if opt != 'leave']
@@ -567,7 +542,7 @@ class Roster:
                         is_this_team = self.model.NewBoolVar(f"is_team_{person}_{idx}_{t_idx}")
                         self.model.Add(self.team_vars[person][idx] == t_idx).OnlyEnforceIf(is_this_team)
                         self.model.Add(self.team_vars[person][idx] != t_idx).OnlyEnforceIf(is_this_team.Not())
-                        t_assigned_vars.append(is_this_load := is_this_team) # simplified naming internally
+                        t_assigned_vars.append(is_this_team)
                     
                     safe_week_str = week_id.replace('/', '_')
                     team_used_this_week = self.model.NewBoolVar(f"used_team_{person}_{safe_week_str}_{t_idx}")
@@ -581,11 +556,8 @@ class Roster:
                 self.model.Add(excess_team_var >= sum_teams_var - 1)
                 weekly_team_penalties.append(excess_team_var)
 
-        # ==========================================
-        # 5. 2-WEEK ROLLING WINDOW TEAM SHITTINESS PENALTIES
-        # ==========================================
         shittiness_window_penalties = []
-        window_size = 14  # 2-week rolling window (14 days)
+        window_size = 14
         
         if self.team_shittiness:
             team_shith_map = [self.team_shittiness.get(self.idx_to_team[i], 0) for i in range(len(self.team_options))]
@@ -605,7 +577,6 @@ class Roster:
                             s_var = self.model.NewIntVar(0, 0, f"shittiness_{person}_{idx}")
                             day_shittiness[idx] = s_var
 
-                    # 14-day rolling window accumulation
                     for idx in range(len(self.dates) - window_size + 1):
                         window_vars = [day_shittiness[idx + offset] for offset in range(window_size) if (idx + offset) in day_shittiness]
                         if window_vars:
@@ -619,48 +590,44 @@ class Roster:
         P = len(self.persons)
         D = len(self.dates)
 
-        # Calculate number of unique months (M)
-        months_dict = {}
+        months_dict_norm = {}
         for idx, date_str in enumerate(self.dates):
             d_obj = datetime.strptime(date_str, '%d/%m/%Y')
             month_key = d_obj.strftime('%Y-%m')
-            months_dict.setdefault(month_key, []).append(idx)
-        M = len(months_dict)
+            months_dict_norm.setdefault(month_key, []).append(idx)
+        M = len(months_dict_norm)
 
-        # Calculate number of unique weeks (W)
-        weeks_dict = {}
+        weeks_dict_norm = {}
         for idx, date_str in enumerate(self.dates):
             d_obj = datetime.strptime(date_str, '%d/%m/%Y')
             monday_obj = d_obj - timedelta(days=d_obj.weekday())
             week_id = monday_obj.strftime('%d/%m/%Y')
-            weeks_dict.setdefault(week_id, []).append(idx)
-        W = len(weeks_dict)
+            weeks_dict_norm.setdefault(week_id, []).append(idx)
+        W = len(weeks_dict_norm)
 
         P_base, D_base, M_base, W_base = 11, 30, 1, 6
 
-        # Inverted normalization multipliers relative to baseline
-        scale_PD = (P_base * D_base * 1000) // (P * D)          # For Person-Days
-        scale_P  = (P_base * 1000) // P                         # For Persons
-        scale_PM = (P_base * M_base * 1000) // max(1, P * M)     # For Person-Months
-        scale_D  = (D_base * 1000) // D                         # For Days
-        scale_PW = (P_base * W_base * 1000) // max(1, P * W)     # For Person-Weeks
+        scale_PD = (P_base * D_base * 1000) // max(1, P * D)
+        scale_P  = (P_base * 1000) // max(1, P)
+        scale_PM = (P_base * M_base * 1000) // max(1, P * M)
+        scale_D  = (D_base * 1000) // max(1, D)
+        scale_PW = (P_base * W_base * 1000) // max(1, P * W)
 
         # ==========================================
         # COMBINED OBJECTIVE WEIGHTS (Integer Scaled)
         # ==========================================
         total_objective = (
-            sum(spread_penalties) * scale_PD * 1 +                  # 7-day rolling window call spread
-            sum(monthly_equity_penalties) * scale_P * 1 +          # Monthly max/min variance call spread
-            sum(monthly_smoothing_penalties) * scale_PM * 1 +      # Month-to-month transition smoothness
-            sum(largest_gaps) * scale_P * 2 +                      # Gap minimization between shifts
-            wd_disparity * scale_D * 8 +                           # Weekday parity
-            we_disparity * scale_D * 8 +                           # Weekend parity
-            total_call_disparity * scale_D * 15 +                  # Total call parity
-            sum(team_evenness_penalties) * scale_P * 2 +           # Team workload balance
-            sum(weekly_team_penalties) * scale_PW * 10 +           # Minimize multiple teams per week
-            sum(shittiness_window_penalties) * scale_PD * 5        # Minimize shittiness in rolling windows
+            sum(spread_penalties) * scale_PD * 1 +                  
+            sum(monthly_equity_penalties) * scale_P * 1 +          
+            sum(monthly_smoothing_penalties) * scale_PM * 1 +      
+            sum(largest_gaps) * scale_P * 2 +                      
+            wd_disparity * scale_D * 8 +                           
+            we_disparity * scale_D * 8 +                           
+            total_call_disparity * scale_D * 15 +                  
+            sum(team_evenness_penalties) * scale_P * 2 +           
+            sum(weekly_team_penalties) * scale_PW * 10 +           
+            sum(shittiness_window_penalties) * scale_PD * 3        
         )
-        self.model.Minimize(total_objective)
         self.model.Minimize(total_objective)
 
     def initialise(self):
@@ -671,45 +638,14 @@ class Roster:
         self._init_teams()
         self._build_objective()
 
-    def check_valid(self):
-        if not self.persons:
-            print("WARNING: No staff members provided. Roster cannot be generated.")
-            return False
-        if not self.call_requirements:
-            print("WARNING: No call requirements provided. Roster cannot be generated.")
-            return False
-        if not self.team_requirements:
-            print("WARNING: No teams requirements provided. Roster cannot be generated.")
-            return False
-        if not self.team_options:
-            print("WARNING: No teams options provided. Roster cannot be generated.")
-            return False
-        if not self.team_sacrificability:
-            print("WARNING: No teams priorities provided. Roster cannot be generated.")
-            return False
-        if self.max_solve_time_seconds <= 0:
-            print("WARNING: No maximum solving time provided. Roster cannot be generated")
-            return False
-        return True
-
     def solve(self):
-        if not self.check_valid():
-            print("Model not valid. Quitting. ")
-            return False
-
         self.solver = cp_model.CpSolver()
-        self.solver.parameters.max_time_in_seconds = self.max_solve_time_seconds
+        if self.max_solve_time_seconds:
+            self.solver.parameters.max_time_in_seconds = float(self.max_solve_time_seconds)
         
-        progress_logger = ObjectiveLogger()
-        status = self.solver.Solve(self.model, progress_logger)
-        
-        print(f"Solution status: {status}")
+        solution_callback = ObjectiveLogger()
+        status = self.solver.Solve(self.model, solution_callback)
         
         if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-            for person in self.team_vars:
-                for idx, date_str in enumerate(self.dates):
-                    if idx in self.team_vars[person]:
-                        val = self.solver.Value(self.team_vars[person][idx])
-                        self.teams_table[person][date_str] = self.idx_to_team[val]
             return True
         return False

@@ -1,138 +1,156 @@
 from datetime import datetime, timedelta
 import csv
-import random
-from roster import Roster  # Assuming your Roster class is in roster.py
+from roster import Roster
 
 def main():
-    start_date = '1/11/2026'
-    end_date = '30/11/2026'
-
-    leave_buffers = [1, 0]
-    blockout_buffers = [1, 0]
-    min_call_interval = 2
-    max_teams_per_week = 1
-    max_solve_time_seconds = 120
+    # ---------------------------------------------------------
+    # CONFIGURABLE PARAMETERS
+    # ---------------------------------------------------------
+    # leave_buffers = [1, 0]
+    # blockout_buffers = [1, 0]
+    # min_call_interval = 2
+    # max_teams_per_week = 1
+    # max_solve_time_seconds = 120
 
     # ---------------------------------------------------------
-    # READ INPUT CSV FILES & EXTRACT DYNAMIC LISTS
+    # 1. READ LEAVES & BLOCKOUTS & EXTRACT DATES & STAFF DYNAMICALLY
     # ---------------------------------------------------------
-    
-    # 1. Read Team Parameters (Sacrificability, Min Requirements, Shittiness)
-    team_sacrificability = {}
-    team_requirements_min = {}
-    team_shittiness = {}
-
-    with open('input_team_parameters.csv', 'r', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            team_name = row['Team'].strip()
-            if not team_name:
-                continue
-            
-            # Sacrificability
-            if row.get('#sacrificability') is not None and row['#sacrificability'].strip() != '':
-                team_sacrificability[team_name] = int(row['#sacrificability'])
-                
-            # Minimum Team Requirements
-            if row.get('#minimum') is not None and row['#minimum'].strip() != '':
-                min_val = int(row['#minimum'])
-                if min_val > 0:
-                    team_requirements_min[team_name] = min_val
-                    
-            # Team Shittiness
-            if row.get('#shittiness') is not None and row['#shittiness'].strip() != '':
-                team_shittiness[team_name] = int(row['#shittiness'])
-
-    # 2. Read Leaves & Blockouts & Dynamically extract staff members
     leaves_blockouts = {}
     staff_members = []
+    
     with open('input_leaves_blockouts.csv', 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
         header = next(reader)
-        date_cols = header[1:]
+        dates = [d.strip() for d in header[1:] if d.strip()] # Inferred date list
+
         for row in reader:
             person = row[0].strip()
             if not person:
                 continue
             staff_members.append(person)
-            for i, d in enumerate(date_cols):
-                status = row[i+1]
-                if status != '-1':
-                    leaves_blockouts.setdefault(person, []).append((d, status))
+            for i, d in enumerate(dates):
+                if i + 1 < len(row):
+                    status = row[i + 1]
+                    if status != '-1':
+                        leaves_blockouts.setdefault(person, []).append((dates[i], status))
 
-    # 3. Read Team Requirements & Dynamically extract team options
+    # ---------------------------------------------------------
+    # 2. READ REMAINING CSV INPUT FILES
+    # ---------------------------------------------------------
+    
+    # Team Parameters
+    team_sacrificability = {}
+    team_requirements_min = {}
+    team_shittiness = {}
+
+    # General Parameters
+    leave_buffers = [None, None]
+    blockout_buffers = [None, None]
+    min_call_interval = None
+    max_solve_time_seconds = None
+
+    with open('input_general_parameters.csv', 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            team_name = row['#team'].strip()
+            if row.get('#sacrificability') is not None and row['#sacrificability'].strip() != '':
+                if not team_name:
+                    continue
+                team_sacrificability[team_name] = int(row['#sacrificability'])
+            if row.get('#minimum') is not None and row['#minimum'].strip() != '':
+                if not team_name:
+                    continue
+                min_val = int(row['#minimum'])
+                if min_val > 0:
+                    team_requirements_min[team_name] = min_val
+            if row.get('#shittiness') is not None and row['#shittiness'].strip() != '':
+                if not team_name:
+                    continue
+                team_shittiness[team_name] = int(row['#shittiness'])
+
+            if row.get('#al_buffer_before') is not None and row['#al_buffer_before'].strip() != '':
+                leave_buffers[0] = int(row['#al_buffer_before'])
+            if row.get('#al_buffer_after') is not None and row['#al_buffer_after'].strip() != '':
+                leave_buffers[1] = int(row['#al_buffer_after'])
+            if row.get('#bl_buffer_before') is not None and row['#bl_buffer_before'].strip() != '':
+                blockout_buffers[0] = int(row['#bl_buffer_before'])
+            if row.get('#bl_buffer_after') is not None and row['#bl_buffer_after'].strip() != '':
+                blockout_buffers[1] = int(row['#bl_buffer_after'])
+            if row.get("#min_call_interval") is not None and row['#min_call_interval'].strip() != '':
+                min_call_interval = int(row['#min_call_interval'])
+            if row.get("#max_solve_time_seconds") is not None and row['#max_solve_time_seconds'].strip() != '':
+                max_solve_time_seconds = int(row['#max_solve_time_seconds'])
+
+    # Team Requirements & Options
     team_requirements = {}
     team_options_set = set()
     with open('input_team_requirements.csv', 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
-        header = next(reader)
-        date_cols = header[1:]
+        next(reader) # skip header
         for row in reader:
             team_name = row[0].strip()
             if not team_name:
                 continue
             team_options_set.add(team_name)
-            for i, d in enumerate(date_cols):
-                val = int(row[i+1])
-                if val > 0:
-                    team_requirements.setdefault(date_cols[i], {})[team_name] = val
+            for i, d in enumerate(dates):
+                if i + 1 < len(row):
+                    val = int(row[i + 1])
+                    if val > 0:
+                        team_requirements.setdefault(dates[i], {})[team_name] = val
 
-    # Ensure special system options are always included in team_options
     team_options_set.add('ps_cover')
     team_options_set.add('leave')
     team_options = list(team_options_set)
 
-    # 4. Read Team Locks
+    # Team Locks
     teams = {}
     with open('input_teams.csv', 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
-        header = next(reader)
-        date_cols = header[1:]
+        next(reader)
         for row in reader:
             person = row[0].strip()
             if not person:
                 continue
-            for i, d in enumerate(date_cols):
-                val = row[i+1].strip()
-                if val:
-                    teams.setdefault(person, {})[date_cols[i]] = val
+            for i, d in enumerate(dates):
+                if i + 1 < len(row):
+                    val = row[i + 1].strip()
+                    if val:
+                        teams.setdefault(person, {})[dates[i]] = val
 
-    # 5. Read Call Locks
+    # Call Locks
     calls = {}
     with open('input_calls.csv', 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
-        header = next(reader)
-        date_cols = header[1:]
+        next(reader)
         for row in reader:
             person = row[0].strip()
             if not person:
                 continue
-            for i, d in enumerate(date_cols):
-                val = int(row[i+1])
-                if val != -1:
-                    calls.setdefault(person, {})[date_cols[i]] = val
+            for i, d in enumerate(dates):
+                if i + 1 < len(row):
+                    val_str = row[i + 1].strip()
+                    # Skip if empty or marked as -1
+                    if val_str and val_str != '-1':
+                        val = int(val_str)
+                        calls.setdefault(person, {})[dates[i]] = val
 
-    # 6. Read Call Requirements
+    # Call Requirements
     call_requirements = {}
     with open('input_call_requirements.csv', 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
-        header = next(reader)
-        date_cols = header[1:]
+        next(reader)
         row = next(reader)
-        for i, d in enumerate(date_cols):
-            call_requirements[date_cols[i]] = int(row[i+1])
-
-    start_dt = datetime.strptime(start_date, '%d/%m/%Y')
-    end_dt = datetime.strptime(end_date, '%d/%m/%Y')
-    dates = [(start_dt + timedelta(days=i)).strftime('%d/%m/%Y') for i in range((end_dt - start_dt).days + 1)]
+        for i, d in enumerate(dates):
+            if i + 1 < len(row):
+                call_requirements[dates[i]] = int(row[i + 1])
 
     # ---------------------------------------------------------
     # INITIALIZE AND SOLVE MODEL
     # ---------------------------------------------------------
-    print("\nInitializing Roster optimization model...")
+    print(f"\nInitializing Roster optimization model with {len(dates)} days between ({dates[0]} to {dates[-1]})...")
+    
     roster_sched = Roster(
-        start_date=start_date,
-        end_date=end_date,
+        dates=dates,
         persons=staff_members,
         team_requirements=team_requirements,
         team_requirements_min=team_requirements_min,
@@ -145,7 +163,6 @@ def main():
         leave_buffers=leave_buffers,  
         blockout_buffers=blockout_buffers,
         min_call_interval=min_call_interval,
-        max_teams_per_week=max_teams_per_week,
         team_shittiness=team_shittiness,
         max_solve_time_seconds=max_solve_time_seconds
     )
@@ -166,11 +183,22 @@ def main():
                 for idx, d_str in enumerate(dates):
                     d_obj = datetime.strptime(d_str, '%d/%m/%Y')
                     
-                    team_val = roster_sched.teams_table[person].get(d_str, 'Unassigned')
+                    team_val = ''
+                    if person in roster_sched.team_vars and idx in roster_sched.team_vars[person]:
+                        var = roster_sched.team_vars[person][idx]
+                        val_idx = roster_sched.solver.Value(var)
+                        team_val = roster_sched.idx_to_team.get(val_idx, 'Unassigned')
+                    else:
+                        # Weekends or unassigned days default nicely here
+                        team_val = '' if d_obj.weekday() >= 5 else 'Unassigned'
+                    
                     if team_val != 'leave' and d_obj.weekday() >= 5:
                         team_val = ''
                     
-                    is_on_call = bool(roster_sched.solver.Value(roster_sched.call_vars[person][idx]))
+                    # Query call status safely
+                    is_on_call = False
+                    if person in roster_sched.call_vars and idx in roster_sched.call_vars[person]:
+                        is_on_call = bool(roster_sched.solver.Value(roster_sched.call_vars[person][idx]))
                     
                     if is_on_call:
                         combined_val = f"{team_val} (call)" if team_val else "(call)"
