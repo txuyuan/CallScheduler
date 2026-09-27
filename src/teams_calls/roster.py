@@ -614,20 +614,53 @@ class Roster:
                             shittiness_window_penalties.append(window_sum)
 
         # ==========================================
-        # COMBINED OBJECTIVE WEIGHTS
+        # DIMENSION INITIALIZATIONS FOR NORMALIZATION
+        # ==========================================
+        P = len(self.persons)
+        D = len(self.dates)
+
+        # Calculate number of unique months (M)
+        months_dict = {}
+        for idx, date_str in enumerate(self.dates):
+            d_obj = datetime.strptime(date_str, '%d/%m/%Y')
+            month_key = d_obj.strftime('%Y-%m')
+            months_dict.setdefault(month_key, []).append(idx)
+        M = len(months_dict)
+
+        # Calculate number of unique weeks (W)
+        weeks_dict = {}
+        for idx, date_str in enumerate(self.dates):
+            d_obj = datetime.strptime(date_str, '%d/%m/%Y')
+            monday_obj = d_obj - timedelta(days=d_obj.weekday())
+            week_id = monday_obj.strftime('%d/%m/%Y')
+            weeks_dict.setdefault(week_id, []).append(idx)
+        W = len(weeks_dict)
+
+        P_base, D_base, M_base, W_base = 11, 30, 1, 6
+
+        # Inverted normalization multipliers relative to baseline
+        scale_PD = (P_base * D_base * 1000) // (P * D)          # For Person-Days
+        scale_P  = (P_base * 1000) // P                         # For Persons
+        scale_PM = (P_base * M_base * 1000) // max(1, P * M)     # For Person-Months
+        scale_D  = (D_base * 1000) // D                         # For Days
+        scale_PW = (P_base * W_base * 1000) // max(1, P * W)     # For Person-Weeks
+
+        # ==========================================
+        # COMBINED OBJECTIVE WEIGHTS (Integer Scaled)
         # ==========================================
         total_objective = (
-            sum(spread_penalties) * 1 +                  # 7-day rolling window call spread
-            sum(monthly_equity_penalties) * 1 +          # Monthly max/min variance call spread
-            sum(monthly_smoothing_penalties) * 1 +       # Month-to-month transition smoothness call spread
-            sum(largest_gaps) * 2 +                      # Gap minimization between shifts
-            wd_disparity * 8 +                          # Weekday parity
-            we_disparity * 8 +                          # Weekend parity
-            total_call_disparity * 15 +                  # Total call parity
-            sum(team_evenness_penalties) * 2 +           # Team workload balance
-            sum(weekly_team_penalties) * 10 +            # Minimize multiple teams per week (ideal is 1)
-            sum(shittiness_window_penalties) * 3         # Minimize shittiness in 2-week rolling windows
+            sum(spread_penalties) * scale_PD * 1 +                  # 7-day rolling window call spread
+            sum(monthly_equity_penalties) * scale_P * 1 +          # Monthly max/min variance call spread
+            sum(monthly_smoothing_penalties) * scale_PM * 1 +      # Month-to-month transition smoothness
+            sum(largest_gaps) * scale_P * 2 +                      # Gap minimization between shifts
+            wd_disparity * scale_D * 8 +                           # Weekday parity
+            we_disparity * scale_D * 8 +                           # Weekend parity
+            total_call_disparity * scale_D * 15 +                  # Total call parity
+            sum(team_evenness_penalties) * scale_P * 2 +           # Team workload balance
+            sum(weekly_team_penalties) * scale_PW * 10 +           # Minimize multiple teams per week
+            sum(shittiness_window_penalties) * scale_PD * 5        # Minimize shittiness in rolling windows
         )
+        self.model.Minimize(total_objective)
         self.model.Minimize(total_objective)
 
     def initialise(self):
