@@ -21,18 +21,17 @@ def main():
     with open('input_leaves_blockouts.csv', 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
         header = next(reader)
-        dates = [d.strip() for d in header[1:] if d.strip()] # Inferred date list
 
         for row in reader:
             person = row[0].strip()
             if not person:
                 continue
             staff_members.append(person)
-            for i, d in enumerate(dates):
-                if i + 1 < len(row):
-                    status = row[i + 1]
-                    if status != '-1':
-                        leaves_blockouts.setdefault(person, []).append((dates[i], status))
+            for datestr, status in zip(header[1:], row[1:]):
+                d = datestr.strip()
+                status_val = status.strip()
+                if d and status_val and status_val != '-1':
+                    leaves_blockouts.setdefault(person, []).append((d, status_val))
 
     # ---------------------------------------------------------
     # 2. READ REMAINING CSV INPUT FILES
@@ -83,74 +82,85 @@ def main():
 
     # Team Requirements & Options
     team_requirements = {}
-    team_options_set = set()
+    team_options_set = {'ps_cover', 'leave'}
     with open('input_team_requirements.csv', 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
-        next(reader) # skip header
+        header = next(reader)
         for row in reader:
             team_name = row[0].strip()
             if not team_name:
                 continue
             team_options_set.add(team_name)
-            for i, d in enumerate(dates):
-                if i + 1 < len(row):
-                    val = int(row[i + 1])
-                    if val > 0:
-                        team_requirements.setdefault(dates[i], {})[team_name] = val
 
-    team_options_set.add('ps_cover')
-    team_options_set.add('leave')
+            for datestr, val in zip(header[1:], row[1:]):
+                d = datestr.strip()
+                v = val.strip()
+                if d and v:
+                    try:
+                        int_val = int(v)
+                        if int_val > 0:
+                            team_requirements.setdefault(d, {})[team_name] = int_val
+                    except ValueError:
+                        pass
     team_options = list(team_options_set)
 
     # Team Locks
     teams = {}
     with open('input_teams.csv', 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
-        next(reader)
+        header = next(reader)
         for row in reader:
             person = row[0].strip()
             if not person:
                 continue
-            for i, d in enumerate(dates):
-                if i + 1 < len(row):
-                    val = row[i + 1].strip()
-                    if val:
-                        teams.setdefault(person, {})[dates[i]] = val
+            for datestr, val in zip(header[1:], row[1:]):
+                d = datestr.strip()
+                v = val.strip()
+                if d and v:
+                    teams.setdefault(person, {})[d] = v
 
     # Call Locks
     calls = {}
     with open('input_calls.csv', 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
-        next(reader)
+        header = next(reader)
         for row in reader:
             person = row[0].strip()
             if not person:
                 continue
-            for i, d in enumerate(dates):
-                if i + 1 < len(row):
-                    val_str = row[i + 1].strip()
-                    # Skip if empty or marked as -1
-                    if val_str and val_str != '-1':
-                        val = int(val_str)
-                        calls.setdefault(person, {})[dates[i]] = val
+            for datestr, val_str in zip(header[1:], row[1:]):
+                d = datestr.strip()
+                v = val_str.strip()
+                if d and v and v != '-1':
+                    try:
+                        val = int(v)
+                        calls.setdefault(person, {})[d] = val
+                    except ValueError:
+                        pass
 
     # Call Requirements
     call_requirements = {}
     with open('input_call_requirements.csv', 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
-        next(reader)
-        row = next(reader)
-        for i, d in enumerate(dates):
-            if i + 1 < len(row):
-                call_requirements[dates[i]] = int(row[i + 1])
+        header = next(reader)
+        for row in reader:
+            for datestr, val_str in zip(header[1:], row[1:]):
+                d = datestr.strip()
+                v = val_str.strip()
+                if d and v:
+                    try:
+                        call_requirements[d] = int(v)
+                    except ValueError:
+                        pass
 
     # ---------------------------------------------------------
     # INITIALIZE AND SOLVE MODEL
     # ---------------------------------------------------------
-    print(f"\nInitializing Roster optimization model with {len(dates)} days between ({dates[0]} to {dates[-1]})...")
+    # print(f"\nInitializing Roster optimization model with {len(dates)} days between ({dates[0]} to {dates[-1]})...")
+    print(f"\nInitializing Roster optimization model")
+    print(calls)
     
     roster_sched = Roster(
-        dates=dates,
         persons=staff_members,
         team_requirements=team_requirements,
         team_requirements_min=team_requirements_min,
@@ -175,11 +185,11 @@ def main():
         csv_filename = "output_roster.csv"
         with open(csv_filename, mode='w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            header = ['Staff'] + dates
-            writer.writerow(header)
+            header_out = ['Staff'] + dates
+            writer.writerow(header_out)
             
             for person in staff_members:
-                row = [person]
+                row_out = [person]
                 for idx, d_str in enumerate(dates):
                     d_obj = datetime.strptime(d_str, '%d/%m/%Y')
                     
@@ -189,13 +199,11 @@ def main():
                         val_idx = roster_sched.solver.Value(var)
                         team_val = roster_sched.idx_to_team.get(val_idx, 'Unassigned')
                     else:
-                        # Weekends or unassigned days default nicely here
                         team_val = '' if d_obj.weekday() >= 5 else 'Unassigned'
                     
                     if team_val != 'leave' and d_obj.weekday() >= 5:
                         team_val = ''
                     
-                    # Query call status safely
                     is_on_call = False
                     if person in roster_sched.call_vars and idx in roster_sched.call_vars[person]:
                         is_on_call = bool(roster_sched.solver.Value(roster_sched.call_vars[person][idx]))
@@ -205,13 +213,13 @@ def main():
                     else:
                         combined_val = team_val
                         
-                    row.append(combined_val)
+                    row_out.append(combined_val)
                     
-                writer.writerow(row)
+                writer.writerow(row_out)
                 
         print(f"Consolidated schedule successfully exported to '{csv_filename}'")
     else:
-        print("No feasible solution found.")
+        print("No feasible solution file found.")
 
 if __name__ == '__main__':
     main()

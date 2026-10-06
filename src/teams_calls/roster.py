@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 import time
 from ortools.sat.python import cp_model
 
+MIN_CALL_INTERVAL_ENABLED = True
+
 class ObjectiveLogger(cp_model.CpSolverSolutionCallback):
     def __init__(self):
         super().__init__()
@@ -18,7 +20,6 @@ class ObjectiveLogger(cp_model.CpSolverSolutionCallback):
 class Roster:
     def __init__(
         self,
-        dates=None,
         persons=None,
         team_requirements=None,
         team_options=None,
@@ -34,11 +35,7 @@ class Roster:
         team_shittiness=None,
         max_solve_time_seconds=None,
     ):
-        # 1. Cleanse incoming date array
-        raw_dates = dates or []
-        self.dates = [self._parse_date_universal(d).strftime('%d/%m/%Y') for d in raw_dates]
-        
-        # 2. Cleanse and normalize all incoming date keys/entries upfront
+        #Cleanse and normalize all incoming date keys/entries upfront
         self.team_requirements = {}
         for k, v in (team_requirements or {}).items():
             try:
@@ -106,8 +103,8 @@ class Roster:
 
         self.model = None
         self.solver = None
-        self.weekday_chunks = []
-        self.weekend_chunks = []
+        self.weekday_idxs = []
+        self.weekend_idxs = []
         
         self.daytime_unavailable = {}
         self.nighttime_unavailable = {}
@@ -133,32 +130,41 @@ class Roster:
             try:
                 return datetime.strptime(cleaned, fmt)
             except ValueError:
+                print(f"Failed to parse '{cleaned}' with format '{fmt}', trying next format...")
                 continue
         
         raise ValueError(f"Unable to parse malformed date string: '{raw_date}'")
 
     def _init_globals(self):
-        # Directly evaluate chunks using the passed-in dates array
+        optimise_dates_set = self.team_requirements.keys() | self.call_requirements.keys()
+        dates_set = self.team_requirements.keys() | self.call_requirements.keys() | {d for person in self.teams for d in self.teams[person]} | {d for person in self.calls for d in self.calls[person]} | {d for person in self.leaves_blockouts for d, _ in self.leaves_blockouts[person]}
+        self.optimise_dates = sorted(optimise_dates_set, key=lambda d: datetime.strptime(d, '%d/%m/%Y'))
+        self.dates = sorted(dates_set, key=lambda d: datetime.strptime(d, '%d/%m/%Y'))
+        print(self.optimise_dates)
+        print(self.dates)
+
+        self.date_to_idx = {d: i for i, d in enumerate(self.dates)}
+        self.optimise_dates_to_idx = {d: self.date_to_idx[d] for d in self.optimise_dates}
+
         for idx, d_str in enumerate(self.dates):
             d_obj = datetime.strptime(d_str, '%d/%m/%Y')
             if d_obj.weekday() < 5:
-                self.weekday_chunks.append(idx)
+                self.weekday_idxs.append(idx)
             else:
-                self.weekend_chunks.append(idx)
+                self.weekend_idxs.append(idx)
+
+        persons_set = set(self.teams.keys()) | set(self.calls.keys()) | set(self.leaves_blockouts.keys())
+        self.persons = list(persons_set)
 
     def _init_leaves_blockouts(self):
         persons = list(self.leaves_blockouts.keys()) or list(self.teams.keys())
-        date_to_idx = {d: i for i, d in enumerate(self.dates)}
 
         for person in persons:
-            self.daytime_unavailable[person] = {i: 0 for i in range(len(self.dates))}
-            self.nighttime_unavailable[person] = {i: 0 for i in range(len(self.dates))}
+            self.daytime_unavailable[person] = {i: 0 for i in range(len(self.optimise_dates))}
+            self.nighttime_unavailable[person] = {i: 0 for i in range(len(self.optimise_dates))}
             
-            p_entries = self.leaves_blockouts.get(person, [])
-            for date_str, status in p_entries:
-                if date_str not in date_to_idx:
-                    continue
-                idx = date_to_idx[date_str]
+            for date_str, status in self.leaves_blockouts.get(person, []):
+                idx = self.date_to_idx[date_str]
                 d_obj = datetime.strptime(date_str, '%d/%m/%Y')
 
                 status_str = str(status).strip().upper()
@@ -167,49 +173,59 @@ class Roster:
 
                     pre, post = self.leave_buffers[0], self.leave_buffers[1]
                     for offset in range(-pre, post + 1):
-                        target_idx = idx + offset
-                        if 0 <= target_idx < len(self.dates):
+                        target_date_obj = d_obj + timedelta(days=offset)
+                        target_date_str = target_date_obj.strftime('%d/%m/%Y')
+                        if target_date_str in self.date_to_idx:
+                            target_idx = self.date_to_idx[target_date_str]
                             self.nighttime_unavailable[person][target_idx] = 1
 
                     if d_obj.weekday() == 0:  # Monday => block preceding weekend
                         for offset in range(-2, 0):
-                            target_idx = idx + offset
-                            if 0 <= target_idx < len(self.dates):
+                            target_date_obj = d_obj + timedelta(days=offset)
+                            target_date_str = target_date_obj.strftime('%d/%m/%Y')
+                            if target_date_str in self.date_to_idx:
+                                target_idx = self.date_to_idx[target_date_str]
                                 self.nighttime_unavailable[person][target_idx] = 1
                     elif d_obj.weekday() == 4:  # Friday => block following weekend
                         for offset in range(1, 3):  
-                            target_idx = idx + offset
-                            if 0 <= target_idx < len(self.dates):
+                            target_date_obj = d_obj + timedelta(days=offset)
+                            target_date_str = target_date_obj.strftime('%d/%m/%Y')
+                            if target_date_str in self.date_to_idx:
+                                target_idx = self.date_to_idx[target_date_str]
                                 self.nighttime_unavailable[person][target_idx] = 1
 
                 elif status_str == 'B':
                     pre, post = self.blockout_buffers[0], self.blockout_buffers[1]
                     for offset in range(-pre, post + 1):
-                        target_idx = idx + offset
-                        if 0 <= target_idx < len(self.dates):
+                        target_date_obj = d_obj + timedelta(days=offset)
+                        target_date_str = target_date_obj.strftime('%d/%m/%Y')
+                        if target_date_str in self.date_to_idx:
+                            target_idx = self.date_to_idx[target_date_str]
                             self.nighttime_unavailable[person][target_idx] = 1
 
     def _init_calls(self):
         for person in self.persons:
             self.call_vars[person] = {}
-            for idx, date_str in enumerate(self.dates):
+
+            for date_str in self.optimise_dates:
+                idx = self.date_to_idx[date_str]
                 self.call_vars[person][idx] = self.model.NewBoolVar(f"call_{person}_{idx}")
-                
+
+                # If nighttime unavailable anywhere on the master timeline, lock to 0
                 if self.nighttime_unavailable.get(person, {}).get(idx, 0) == 1:
                     self.model.Add(self.call_vars[person][idx] == 0)
 
-                if person in self.calls and date_str in self.calls[person]:
-                    locked_call_val = int(self.calls[person][date_str])
-                    self.model.Add(self.call_vars[person][idx] == locked_call_val)
+        # Add lock data
+        for person in self.calls:
+            for date_str in self.calls[person]:
+                self.call_vars[person][idx] = self.model.NewBoolVar(f"call_{person}_{idx}")
+                call_val = int(self.calls[person][date_str])
+                self.model.Add(self.call_vars[person][idx] == call_val)
 
-        for person in self.persons:
-            for idx in range(len(self.dates) - self.min_call_interval):
-                self.model.AddAtMostOne([
-                    self.call_vars[person][idx + offset]
-                    for offset in range(self.min_call_interval + 1)
-                ])
+        # Add call min requirements
+        for date_str in self.optimise_dates:
+            idx = self.date_to_idx[date_str]
 
-        for idx, date_str in enumerate(self.dates):
             required_calls = self.call_requirements.get(date_str, 0)
             if required_calls > 0:
                 daily_assigned_calls = [
@@ -219,6 +235,24 @@ class Roster:
                 ]
                 if daily_assigned_calls:
                     self.model.Add(sum(daily_assigned_calls) == required_calls)
+
+        if MIN_CALL_INTERVAL_ENABLED:
+            for person in self.persons:
+                for date_str in self.optimise_dates:
+                    d_obj = datetime.strptime(date_str, '%d/%m/%Y')
+                    window_vars = []
+                    
+                    for offset in range(self.min_call_interval + 1):
+                        target_date_obj = d_obj + timedelta(days=offset)
+                        target_date_str = target_date_obj.strftime('%d/%m/%Y')
+                        
+                        if target_date_str in self.date_to_idx:
+                            target_idx = self.date_to_idx[target_date_str]
+                            if target_idx in self.call_vars[person]:
+                                window_vars.append(self.call_vars[person][target_idx])
+                                
+                    if window_vars:
+                        self.model.AddAtMostOne(window_vars)
 
     def _init_teams(self):
         self.teams_table = {p: {d: None for d in self.dates} for p in self.persons}
@@ -456,8 +490,8 @@ class Roster:
             we_sum = self.model.NewIntVar(0, len(self.dates), f"we_sum_{person}")
             total_sum = self.model.NewIntVar(0, len(self.dates), f"total_calls_{person}")
             
-            self.model.Add(wd_sum == sum(self.call_vars[person][idx] for idx in self.weekday_chunks if idx in self.call_vars[person]))
-            self.model.Add(we_sum == sum(self.call_vars[person][idx] for idx in self.weekend_chunks if idx in self.call_vars[person]))
+            self.model.Add(wd_sum == sum(self.call_vars[person][idx] for idx in self.weekday_idxs if idx in self.call_vars[person]))
+            self.model.Add(we_sum == sum(self.call_vars[person][idx] for idx in self.weekend_idxs if idx in self.call_vars[person]))
             self.model.Add(total_sum == sum(self.call_vars[person][idx] for idx in range(len(self.dates)) if idx in self.call_vars[person]))
             
             staff_weekday_sums.append(wd_sum)
