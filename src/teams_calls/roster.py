@@ -3,6 +3,8 @@ import time
 from ortools.sat.python import cp_model
 
 MIN_CALL_INTERVAL_ENABLED = True
+TEAMS_ONLY_ON_WEEKDAYS = True
+TEAM_MIN_REQUIREMENT_ENABLED = True
 
 class ObjectiveLogger(cp_model.CpSolverSolutionCallback):
     def __init__(self):
@@ -204,6 +206,7 @@ class Roster:
                             self.nighttime_unavailable[person][target_idx] = 1
 
     def _init_calls(self):
+        # Initialise free variables for all optimise dates
         for person in self.persons:
             self.call_vars[person] = {}
 
@@ -256,81 +259,73 @@ class Roster:
 
     def _init_teams(self):
         self.teams_table = {p: {d: None for d in self.dates} for p in self.persons}
-        
-        leave_idx = self.team_to_idx.get('leave', 0)
-        pcc_idx = self.team_to_idx.get('ps_cover', 0)
 
+        # implement leave and post_call_cover rules only if they are included
+        leave_idx = self.team_to_idx.get('leave', None)
+        if leave_idx is None:
+            raise IndexError("Leave must be a valid team param option.")
+        pcc_idx = self.team_to_idx.get('ps_cover', None)
+
+        # Initialise team variables
         for person in self.persons:
             self.team_vars[person] = {}
-            for idx, date_str in enumerate(self.dates):
+
+            for date_str in self.optimise_dates:
+                idx = self.date_to_idx[date_str]
                 d_obj = datetime.strptime(date_str, '%d/%m/%Y')
-                if d_obj.weekday() >= 5:
+                if TEAMS_ONLY_ON_WEEKDAYS and d_obj.weekday() >= 5:
                     continue
-                
-                self.team_vars[person][idx] = self.model.NewIntVar(
-                    0, len(self.team_options) - 1, f"team_{person}_{idx}"
-                )
+
+                self.team_vars[person][idx] = self.model.NewBoolVar(f"team_{person}_{idx}")
 
                 if self.daytime_unavailable.get(person, {}).get(idx, 0) == 1:                   
                     self.model.Add(self.team_vars[person][idx] == leave_idx)
                 else:
                     self.model.Add(self.team_vars[person][idx] != leave_idx)
 
-                if person in self.teams and date_str in self.teams[person]:
-                    locked_team_name = str(self.teams[person][date_str]).replace(" (auto)", "").strip()
-                    if locked_team_name in self.team_to_idx:
-                        locked_idx = self.team_to_idx[locked_team_name]
-                        self.model.Add(self.team_vars[person][idx] == locked_idx)
+        # Add lock data
+        for person in self.teams:
+            for date_str in self.teams[person]:
+                self.team_vars[person][idx] = self.model.NewBoolVar(f"team_{person}_{idx}")
+
+                locked_team_name = str(self.teams[person][date_str]).strip()
+                if locked_team_name in self.team_to_idx:
+                    team_idx = self.team_to_idx[locked_team_name]
+                    self.model.Add(self.team_vars[person][idx] == team_idx)
+                else:
+                    print(f"Warning: Locked team '{locked_team_name}' for {person} on {date_str} is not in team options. Ignoring lock.")
 
         # team_requirements constraints
         working_options = [opt for opt in self.team_options if opt != 'leave']
-        for idx, date_str in enumerate(self.dates):
+        
+        for date_str, day_reqs in self.team_requirements.items():
+            if date_str not in self.date_to_idx:
+                continue
+            idx = self.date_to_idx[date_str]
             d_obj = datetime.strptime(date_str, '%d/%m/%Y')
-            if d_obj.weekday() >= 5:
+            if TEAMS_ONLY_ON_WEEKDAYS and d_obj.weekday() >= 5:
                 continue
 
-            day_reqs = self.team_requirements.get(date_str, {})
-            if not day_reqs and self.team_requirements and not any(k in self.team_requirements for k in self.dates):
-                day_reqs = self.team_requirements
-
-            for opt in working_options:
-                max_count = day_reqs.get(opt, 999)
-                if max_count >= 999:
+            for team_opt, max_count in day_reqs.items():
+                if team_opt not in working_options:
+                    print(f"Warning: Team requirement option '{team_opt}' on date {date_str} is not a valid working option. Ignoring this requirement.")
                     continue
 
-                opt_idx = self.team_to_idx[opt]
-                assigned_vars = []
+                team_opt_idx = self.team_to_idx[team_opt]
+                assigned_vars = [] # filter for variables belonging to this team on this date
                 for person in self.persons:
                     if idx in self.team_vars.get(person, {}):
-                        is_opt = self.model.NewBoolVar(f"max_hard_chk_{person}_{idx}_{opt_idx}")
-                        self.model.Add(self.team_vars[person][idx] == opt_idx).OnlyEnforceIf(is_opt)
-                        self.model.Add(self.team_vars[person][idx] != opt_idx).OnlyEnforceIf(is_opt.Not())
+                        is_opt = self.model.NewBoolVar(f"max_hard_chk_{person}_{idx}_{team_opt_idx}")
+                        self.model.Add(self.team_vars[person][idx] == team_opt_idx).OnlyEnforceIf(is_opt)
+                        self.model.Add(self.team_vars[person][idx] != team_opt_idx).OnlyEnforceIf(is_opt.Not())
                         assigned_vars.append(is_opt)
-
+                        
                 if assigned_vars:
                     self.model.Add(sum(assigned_vars) <= max_count)
 
-        # team_requirements_min constraints
-        for idx, date_str in enumerate(self.dates):
-            d_obj = datetime.strptime(date_str, '%d/%m/%Y')
-            if d_obj.weekday() >= 5:
-                continue
-            
-            for team_name, min_limit in self.team_requirements_min.items():
-                if team_name not in self.team_to_idx:
-                    continue
-                t_idx = self.team_to_idx[team_name]
-                team_presence_vars = []
-                
-                for person in self.persons:
-                    if idx in self.team_vars.get(person, {}):
-                        is_this_team = self.model.NewBoolVar(f"min_chk_{person}_{idx}_{t_idx}")
-                        self.model.Add(self.team_vars[person][idx] == t_idx).OnlyEnforceIf(is_this_team)
-                        self.model.Add(self.team_vars[person][idx] != t_idx).OnlyEnforceIf(is_this_team.Not())
-                        team_presence_vars.append(is_this_team)
-                
-                if team_presence_vars:
-                    self.model.Add(sum(team_presence_vars) >= min_limit)
+                    if TEAM_MIN_REQUIREMENT_ENABLED and team_opt in self.team_requirements_min:
+                        min_limit = self.team_requirements_min[team_opt]
+                        self.model.Add(sum(assigned_vars) >= min_limit)
 
         weeks_dict = {}
         for idx, date_str in enumerate(self.dates):
@@ -342,12 +337,12 @@ class Roster:
             week_id = monday_obj.strftime('%d/%m/%Y')
             weeks_dict.setdefault(week_id, []).append(idx)
 
-        leave_idx = self.team_to_idx.get('leave')
-
         for person in self.persons:
             for week_id, week_indices in weeks_dict.items():
-                person_week_indices = [idx for idx in week_indices if idx in self.team_vars.get(person, {})]
-                if not person_week_indices:
+                # all the indices in the week they're working
+                # and within the optimise range
+                person_week_indices = [idx for idx in week_indices if idx in self.team_vars.get(person, {}) and idx in self.optimise_dates_to_idx.values()] # all the indices in the week they're working
+                if not person_week_indices: # not working this week
                     continue
 
                 week_pcc_days = []

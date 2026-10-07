@@ -82,7 +82,7 @@ def main():
 
     # Team Requirements & Options
     team_requirements = {}
-    team_options_set = {'ps_cover', 'leave'}
+    team_options_set = {'leave'}
     with open('input_team_requirements.csv', 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
         header = next(reader)
