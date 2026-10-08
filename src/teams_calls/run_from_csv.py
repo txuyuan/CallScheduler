@@ -33,13 +33,23 @@ def main():
                 if d and status_val and status_val != '-1':
                     leaves_blockouts.setdefault(person, []).append((d, status_val))
 
+    daily_leave_counts = {}
+    for person, entries in leaves_blockouts.items():
+        for datestr, status in entries:
+            if status.strip().upper() == 'L':
+                daily_leave_counts[datestr] = daily_leave_counts.get(datestr, 0) + 1
+
+    for datestr, count in daily_leave_counts.items():
+        if count > 2:
+            raise ValueError(f"Leave Policy Violation: On date {datestr}, there are {count} staff members on leave (maximum allowed is 2).")
+
     # ---------------------------------------------------------
     # 2. READ REMAINING CSV INPUT FILES
     # ---------------------------------------------------------
     
     # Team Parameters
     team_sacrificability = {}
-    team_requirements_min = {}
+    team_quota_min = {}
     team_shittiness = {}
 
     # General Parameters
@@ -61,7 +71,7 @@ def main():
                     continue
                 min_val = int(row['#minimum'])
                 if min_val > 0:
-                    team_requirements_min[team_name] = min_val
+                    team_quota_min[team_name] = min_val
             if row.get('#shittiness') is not None and row['#shittiness'].strip() != '':
                 if not team_name:
                     continue
@@ -81,7 +91,7 @@ def main():
                 max_solve_time_seconds = int(row['#max_solve_time_seconds'])
 
     # Team Requirements & Options
-    team_requirements = {}
+    team_quota = {}
     team_options_set = {'leave'}
     with open('input_team_requirements.csv', 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
@@ -99,7 +109,7 @@ def main():
                     try:
                         int_val = int(v)
                         if int_val > 0:
-                            team_requirements.setdefault(d, {})[team_name] = int_val
+                            team_quota.setdefault(d, {})[team_name] = int_val
                     except ValueError:
                         pass
     team_options = list(team_options_set)
@@ -158,12 +168,13 @@ def main():
     # ---------------------------------------------------------
     # print(f"\nInitializing Roster optimization model with {len(dates)} days between ({dates[0]} to {dates[-1]})...")
     print(f"\nInitializing Roster optimization model")
-    print(calls)
+    print(f"Calls: {calls}")
+    print(f"Teams: {teams}")
     
     roster_sched = Roster(
         persons=staff_members,
-        team_requirements=team_requirements,
-        team_requirements_min=team_requirements_min,
+        team_quota=team_quota,
+        team_quota_min=team_quota_min,
         team_options=team_options,
         team_sacrificability=team_sacrificability,
         teams=teams,
@@ -185,12 +196,12 @@ def main():
         csv_filename = "output_roster.csv"
         with open(csv_filename, mode='w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            header_out = ['Staff'] + dates
+            header_out = ['Staff'] + roster_sched.dates
             writer.writerow(header_out)
             
             for person in staff_members:
                 row_out = [person]
-                for idx, d_str in enumerate(dates):
+                for idx, d_str in enumerate(roster_sched.dates):
                     d_obj = datetime.strptime(d_str, '%d/%m/%Y')
                     
                     team_val = ''
