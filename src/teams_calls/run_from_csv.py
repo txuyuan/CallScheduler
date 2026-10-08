@@ -16,7 +16,6 @@ def main():
     # 1. READ LEAVES & BLOCKOUTS & EXTRACT DATES & STAFF DYNAMICALLY
     # ---------------------------------------------------------
     leaves_blockouts = {}
-    staff_members = []
     
     with open('input_leaves_blockouts.csv', 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
@@ -26,7 +25,6 @@ def main():
             person = row[0].strip()
             if not person:
                 continue
-            staff_members.append(person)
             for datestr, status in zip(header[1:], row[1:]):
                 d = datestr.strip()
                 status_val = status.strip()
@@ -168,11 +166,10 @@ def main():
     # ---------------------------------------------------------
     # print(f"\nInitializing Roster optimization model with {len(dates)} days between ({dates[0]} to {dates[-1]})...")
     print(f"\nInitializing Roster optimization model")
-    print(f"Calls: {calls}")
-    print(f"Teams: {teams}")
+    # print(f"Calls: {calls}")
+    # print(f"Teams: {teams}")
     
     roster_sched = Roster(
-        persons=staff_members,
         team_quota=team_quota,
         team_quota_min=team_quota_min,
         team_options=team_options,
@@ -199,7 +196,7 @@ def main():
             header_out = ['Staff'] + roster_sched.dates
             writer.writerow(header_out)
             
-            for person in staff_members:
+            for person in roster_sched.persons:
                 row_out = [person]
                 for idx, d_str in enumerate(roster_sched.dates):
                     d_obj = datetime.strptime(d_str, '%d/%m/%Y')

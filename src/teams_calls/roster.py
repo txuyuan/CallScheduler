@@ -4,15 +4,15 @@ from ortools.sat.python import cp_model
 
 TEAMS_ONLY_ON_WEEKDAYS = True
 
-MIN_CALL_INTERVAL_ENABLED = False
-TEAM_MIN_REQUIREMENT_ENABLED = False
-TEAM_LOCKS_ENABLED = False
-TEAM_QUOTAS_ENABLED = False
+MIN_CALL_INTERVAL_ENABLED = True
+TEAM_MIN_REQUIREMENT_ALSO_ENABLED = False
+TEAM_LOCKS_ENABLED = True
+TEAM_QUOTAS_ENABLED = True
 
-CALL_LOCKS_ENABLED = False
-CALL_QUOTAS_ENABLED = False
+CALL_LOCKS_ENABLED = True
+CALL_QUOTAS_ENABLED = True
 
-PCC_RULES_ENABLED = False
+PCC_RULES_ENABLED = True
 
 class ObjectiveLogger(cp_model.CpSolverSolutionCallback):
     def __init__(self):
@@ -30,7 +30,6 @@ class ObjectiveLogger(cp_model.CpSolverSolutionCallback):
 class Roster:
     def __init__(
         self,
-        persons=None,
         team_quota=None,
         team_options=None,
         team_sacrificability=None, 
@@ -102,7 +101,6 @@ class Roster:
         self.team_options = team_options or []
         self.team_sacrificability = team_sacrificability or {}
         self.team_shittiness = team_shittiness or {}
-        self.persons = persons or []
         self.leave_buffers = leave_buffers or [1, 0]
         self.blockout_buffers = blockout_buffers or [1, 0]
         self.min_call_interval = min_call_interval
@@ -147,15 +145,24 @@ class Roster:
 
     def _init_globals(self):
         optimise_dates_set = self.team_quota.keys() | self.call_requirements.keys()
-        dates_set = self.team_quota.keys() | self.call_requirements.keys() | {d for person in self.teams for d in self.teams[person]} | {d for person in self.calls for d in self.calls[person]} | {d for person in self.leaves_blockouts for d, _ in self.leaves_blockouts[person]}
+        dates_set = (
+            self.team_quota.keys()
+            | self.call_requirements.keys()
+            | {d for person in self.teams for d in self.teams[person]}
+            | {d for person in self.calls for d in self.calls[person]}
+            | {d for person in self.leaves_blockouts for d, _ in self.leaves_blockouts[person]}
+        )
         self.optimise_dates = sorted(optimise_dates_set, key=lambda d: datetime.strptime(d, '%d/%m/%Y'))
         self.dates = sorted(dates_set, key=lambda d: datetime.strptime(d, '%d/%m/%Y'))
-        print(self.optimise_dates)
-        print(self.dates)
+        # print(self.optimise_dates)
+        # print(self.dates)
 
         self.date_to_idx = {d: i for i, d in enumerate(self.dates)}
         self.optimise_dates_to_idx = {d: self.date_to_idx[d] for d in self.optimise_dates}
+        self.optimise_date_idxs = set(self.optimise_dates_to_idx.values())  # NEW: convenient set
 
+        self.weekday_idxs = []
+        self.weekend_idxs = []
         for idx, d_str in enumerate(self.dates):
             d_obj = datetime.strptime(d_str, '%d/%m/%Y')
             if d_obj.weekday() < 5:
@@ -163,17 +170,25 @@ class Roster:
             else:
                 self.weekend_idxs.append(idx)
 
-        persons_set = set(self.teams.keys()) | set(self.calls.keys()) | set(self.leaves_blockouts.keys())
-        self.persons = list(persons_set)
+        # Union of explicit persons argument + everyone referenced anywhere
+        persons_set = (
+            set(self.teams.keys())
+            | set(self.calls.keys())
+            | set(self.leaves_blockouts.keys())
+        )
+        self.persons = sorted(persons_set)   # deterministic
+        # print(self.persons)
 
     def _init_leaves_blockouts(self):
-        persons = list(self.leaves_blockouts.keys()) or list(self.teams.keys())
+        # Iterate over ALL persons (not just those with leave entries), so the
+        # availability dicts exist for everyone and are keyed by GLOBAL index.
+        for person in self.persons:
+            self.daytime_unavailable[person] = {i: 0 for i in range(len(self.dates))}
+            self.nighttime_unavailable[person] = {i: 0 for i in range(len(self.dates))}
 
-        for person in persons:
-            self.daytime_unavailable[person] = {i: 0 for i in range(len(self.optimise_dates))}
-            self.nighttime_unavailable[person] = {i: 0 for i in range(len(self.optimise_dates))}
-            
             for date_str, status in self.leaves_blockouts.get(person, []):
+                if date_str not in self.date_to_idx:
+                    continue
                 idx = self.date_to_idx[date_str]
                 d_obj = datetime.strptime(date_str, '%d/%m/%Y')
 
@@ -197,7 +212,7 @@ class Roster:
                                 target_idx = self.date_to_idx[target_date_str]
                                 self.nighttime_unavailable[person][target_idx] = 1
                     elif d_obj.weekday() == 4:  # Friday => block following weekend
-                        for offset in range(1, 3):  
+                        for offset in range(1, 3):
                             target_date_obj = d_obj + timedelta(days=offset)
                             target_date_str = target_date_obj.strftime('%d/%m/%Y')
                             if target_date_str in self.date_to_idx:
@@ -214,7 +229,6 @@ class Roster:
                             self.nighttime_unavailable[person][target_idx] = 1
 
     def _init_calls(self):
-        # Initialise free variables for all optimise dates
         for person in self.persons:
             self.call_vars[person] = {}
 
@@ -222,29 +236,31 @@ class Roster:
                 idx = self.date_to_idx[date_str]
                 self.call_vars[person][idx] = self.model.NewBoolVar(f"call_{person}_{idx}")
 
-                # If nighttime unavailable anywhere on the master timeline, lock to 0
                 if self.nighttime_unavailable.get(person, {}).get(idx, 0) == 1:
                     self.model.Add(self.call_vars[person][idx] == 0)
 
         if CALL_LOCKS_ENABLED:
-            # Add lock data
             for person in self.calls:
                 for date_str in self.calls[person]:
+                    if date_str not in self.date_to_idx:
+                        continue
                     idx = self.date_to_idx[date_str]
-                    self.call_vars[person][idx] = self.model.NewBoolVar(f"call_{person}_{idx}")
+                    if idx not in self.call_vars[person]:
+                        # Lock is on a non-optimise date — either skip or extend.
+                        # Safer: skip with warning (var doesn't exist to constrain).
+                        print(f"Warning: call lock for {person} on {date_str} is outside optimise_dates; ignoring.")
+                        continue
                     call_val = int(self.calls[person][date_str])
                     self.model.Add(self.call_vars[person][idx] == call_val)
 
-        # Add call requirements
         if CALL_QUOTAS_ENABLED:
             for date_str in self.optimise_dates:
                 idx = self.date_to_idx[date_str]
-
                 required_calls = self.call_requirements.get(date_str, 0)
                 if required_calls > 0:
                     daily_assigned_calls = [
-                        self.call_vars[person][idx] 
-                        for person in self.persons 
+                        self.call_vars[person][idx]
+                        for person in self.persons
                         if idx in self.call_vars[person]
                     ]
                     if daily_assigned_calls:
@@ -255,16 +271,13 @@ class Roster:
                 for date_str in self.optimise_dates:
                     d_obj = datetime.strptime(date_str, '%d/%m/%Y')
                     window_vars = []
-                    
                     for offset in range(self.min_call_interval + 1):
                         target_date_obj = d_obj + timedelta(days=offset)
                         target_date_str = target_date_obj.strftime('%d/%m/%Y')
-                        
                         if target_date_str in self.date_to_idx:
                             target_idx = self.date_to_idx[target_date_str]
                             if target_idx in self.call_vars[person]:
                                 window_vars.append(self.call_vars[person][target_idx])
-                                
                     if window_vars:
                         self.model.AddAtMostOne(window_vars)
 
@@ -335,12 +348,23 @@ class Roster:
                             self.model.Add(self.team_vars[person][idx] == team_opt_idx).OnlyEnforceIf(is_opt)
                             self.model.Add(self.team_vars[person][idx] != team_opt_idx).OnlyEnforceIf(is_opt.Not())
                             assigned_vars.append(is_opt)
+
+                    # check for min requirement feasibility
+                    teams_with_min = {
+                        t: self.team_quota_min[t]
+                        for t in day_reqs
+                        if t in self.team_quota_min and self.team_quota_min[t] > 0
+                    }
+                    total_min_today = sum(teams_with_min.values())
+                    total_quota_today = sum(day_reqs[t] for t in teams_with_min)
+                    if total_min_today > total_quota_today:
+                        raise ValueError("Quota lower than minimum")
                             
                     if assigned_vars:
                         self.model.Add(sum(assigned_vars) <= max_count)
 
                         # add on min requirement also
-                        if TEAM_MIN_REQUIREMENT_ENABLED and team_opt in self.team_quota_min:
+                        if TEAM_MIN_REQUIREMENT_ALSO_ENABLED and team_opt in self.team_quota_min:
                             min_limit = self.team_quota_min[team_opt]
                             self.model.Add(sum(assigned_vars) >= min_limit)
 
@@ -408,6 +432,7 @@ class Roster:
                         self.model.Add(has_pcc_week + has_leave_week <= 1)
     
     def _build_objective(self):
+        # ---------- Spread penalties ----------
         spread_penalties = []
         for person in self.persons:
             person_calls = self.call_vars.get(person, {})
@@ -418,12 +443,13 @@ class Roster:
                     self.model.Add(excess_calls == sum(window_calls))
                     spread_penalties.append(excess_calls)
 
+        # ---------- Month buckets (global idx) ----------
         months_dict = {}
         for idx, date_str in enumerate(self.dates):
             d_obj = datetime.strptime(date_str, '%d/%m/%Y')
             month_key = d_obj.strftime('%Y-%m')
             months_dict.setdefault(month_key, []).append(idx)
-        
+
         sorted_months = sorted(months_dict.keys())
         monthly_smoothing_penalties = []
         monthly_equity_penalties = []
@@ -431,19 +457,19 @@ class Roster:
         for person in self.persons:
             person_calls = self.call_vars.get(person, {})
             person_monthly_sums = []
-            
+
             for m_key in sorted_months:
                 m_indices = months_dict[m_key]
                 m_sum = self.model.NewIntVar(0, len(m_indices), f"m_sum_{person}_{m_key}")
                 self.model.Add(m_sum == sum(person_calls[idx] for idx in m_indices if idx in person_calls))
                 person_monthly_sums.append(m_sum)
-            
+
             if person_monthly_sums:
                 m_max = self.model.NewIntVar(0, len(self.dates), f"m_max_{person}")
                 m_min = self.model.NewIntVar(0, len(self.dates), f"m_min_{person}")
                 self.model.AddMaxEquality(m_max, person_monthly_sums)
                 self.model.AddMinEquality(m_min, person_monthly_sums)
-                
+
                 monthly_equity_variance = self.model.NewIntVar(0, len(self.dates), f"m_var_{person}")
                 self.model.Add(monthly_equity_variance == m_max - m_min)
                 monthly_equity_penalties.append(monthly_equity_variance)
@@ -451,11 +477,11 @@ class Roster:
             for i in range(len(person_monthly_sums) - 1):
                 diff = self.model.NewIntVar(-len(self.dates), len(self.dates), f"diff_{person}_{i}")
                 abs_diff = self.model.NewIntVar(0, len(self.dates), f"abs_diff_{person}_{i}")
-                
                 self.model.Add(diff == person_monthly_sums[i+1] - person_monthly_sums[i])
                 self.model.AddAbsEquality(abs_diff, diff)
                 monthly_smoothing_penalties.append(abs_diff)
 
+        # ---------- Largest gaps ----------
         largest_gaps = []
         num_days = len(self.dates)
 
@@ -463,7 +489,7 @@ class Roster:
             person_calls = self.call_vars.get(person, {})
             unavailable_map = self.nighttime_unavailable.get(person, {})
             gaps = []
-            
+
             prev_rest = self.model.NewIntVar(0, num_days + 1, f"prev_rest_{person}_init")
             self.model.Add(prev_rest == 0)
 
@@ -489,7 +515,7 @@ class Roster:
 
                 tmp = self.model.NewIntVar(0, num_days + 1, f"rest_tmp_{person}_{day}")
                 self.model.Add(tmp == prev_rest + 1)
-                
+
                 new_rest = self.model.NewIntVar(0, num_days + 1, f"rest_{person}_{day}")
                 self.model.AddMultiplicationEquality(new_rest, [tmp, is_rest_day])
 
@@ -505,84 +531,96 @@ class Roster:
             self.model.AddMaxEquality(largest_gap, gaps)
             largest_gaps.append(largest_gap)
 
+        # ---------- Call fairness ----------
         staff_weekday_sums = []
         staff_weekend_sums = []
         staff_total_calls = []
-        
+
         for person in self.persons:
             wd_sum = self.model.NewIntVar(0, len(self.dates), f"wd_sum_{person}")
             we_sum = self.model.NewIntVar(0, len(self.dates), f"we_sum_{person}")
             total_sum = self.model.NewIntVar(0, len(self.dates), f"total_calls_{person}")
-            
+
             self.model.Add(wd_sum == sum(self.call_vars[person][idx] for idx in self.weekday_idxs if idx in self.call_vars[person]))
             self.model.Add(we_sum == sum(self.call_vars[person][idx] for idx in self.weekend_idxs if idx in self.call_vars[person]))
             self.model.Add(total_sum == sum(self.call_vars[person][idx] for idx in range(len(self.dates)) if idx in self.call_vars[person]))
-            
+
             staff_weekday_sums.append(wd_sum)
             staff_weekend_sums.append(we_sum)
             staff_total_calls.append(total_sum)
 
-        max_wd = self.model.NewIntVar(0, len(self.dates), "max_wd")
-        min_wd = self.model.NewIntVar(0, len(self.dates), "min_wd")
-        max_we = self.model.NewIntVar(0, len(self.dates), "max_we")
-        min_we = self.model.NewIntVar(0, len(self.dates), "min_we")
-        max_total = self.model.NewIntVar(0, len(self.dates), "max_total_calls")
-        min_total = self.model.NewIntVar(0, len(self.dates), "min_total_calls")
-        
-        self.model.AddMaxEquality(max_wd, staff_weekday_sums)
-        self.model.AddMinEquality(min_wd, staff_weekday_sums)
-        self.model.AddMaxEquality(max_we, staff_weekend_sums)
-        self.model.AddMinEquality(min_we, staff_weekend_sums)
-        self.model.AddMaxEquality(max_total, staff_total_calls)
-        self.model.AddMinEquality(min_total, staff_total_calls)
-
         wd_disparity = self.model.NewIntVar(0, len(self.dates), "wd_disparity")
         we_disparity = self.model.NewIntVar(0, len(self.dates), "we_disparity")
         total_call_disparity = self.model.NewIntVar(0, len(self.dates), "total_call_disparity")
-        
-        self.model.Add(wd_disparity == max_wd - min_wd)
-        self.model.Add(we_disparity == max_we - min_we)
-        self.model.Add(total_call_disparity == max_total - min_total)
 
+        if staff_weekday_sums:
+            max_wd = self.model.NewIntVar(0, len(self.dates), "max_wd")
+            min_wd = self.model.NewIntVar(0, len(self.dates), "min_wd")
+            self.model.AddMaxEquality(max_wd, staff_weekday_sums)
+            self.model.AddMinEquality(min_wd, staff_weekday_sums)
+            self.model.Add(wd_disparity == max_wd - min_wd)
+        else:
+            self.model.Add(wd_disparity == 0)
+
+        if staff_weekend_sums:
+            max_we = self.model.NewIntVar(0, len(self.dates), "max_we")
+            min_we = self.model.NewIntVar(0, len(self.dates), "min_we")
+            self.model.AddMaxEquality(max_we, staff_weekend_sums)
+            self.model.AddMinEquality(min_we, staff_weekend_sums)
+            self.model.Add(we_disparity == max_we - min_we)
+        else:
+            self.model.Add(we_disparity == 0)
+
+        if staff_total_calls:
+            max_total = self.model.NewIntVar(0, len(self.dates), "max_total_calls")
+            min_total = self.model.NewIntVar(0, len(self.dates), "min_total_calls")
+            self.model.AddMaxEquality(max_total, staff_total_calls)
+            self.model.AddMinEquality(min_total, staff_total_calls)
+            self.model.Add(total_call_disparity == max_total - min_total)
+        else:
+            self.model.Add(total_call_disparity == 0)
+
+        # ---------- Team evenness ----------
         team_evenness_penalties = []
         working_options = [opt for opt in self.team_options if opt != 'leave']
-        
-        for person in self.persons:
-            team_counts = []
-            for opt in working_options:
-                opt_idx = self.team_to_idx[opt]
-                opt_days = []
-                for idx in self.team_vars[person]:
-                    is_opt = self.model.NewBoolVar(f"team_count_{person}_{idx}_{opt_idx}")
-                    self.model.Add(self.team_vars[person][idx] == opt_idx).OnlyEnforceIf(is_opt)
-                    self.model.Add(self.team_vars[person][idx] != opt_idx).OnlyEnforceIf(is_opt.Not())
-                    opt_days.append(is_opt)
-                
-                count_var = self.model.NewIntVar(0, len(self.dates), f"count_{person}_{opt}")
-                self.model.Add(count_var == sum(opt_days))
-                team_counts.append(count_var)
-            
-            p_max_team = self.model.NewIntVar(0, len(self.dates), f"max_team_{person}")
-            p_min_team = self.model.NewIntVar(0, len(self.dates), f"min_team_{person}")
-            self.model.AddMaxEquality(p_max_team, team_counts)
-            self.model.AddMinEquality(p_min_team, team_counts)
-            
-            person_team_variance = self.model.NewIntVar(0, len(self.dates), f"team_var_{person}")
-            self.model.Add(person_team_variance == p_max_team - p_min_team)
-            team_evenness_penalties.append(person_team_variance)
 
+        if working_options:
+            for person in self.persons:
+                team_counts = []
+                for opt in working_options:
+                    opt_idx = self.team_to_idx[opt]
+                    opt_days = []
+                    for idx in self.team_vars[person]:
+                        is_opt = self.model.NewBoolVar(f"team_count_{person}_{idx}_{opt_idx}")
+                        self.model.Add(self.team_vars[person][idx] == opt_idx).OnlyEnforceIf(is_opt)
+                        self.model.Add(self.team_vars[person][idx] != opt_idx).OnlyEnforceIf(is_opt.Not())
+                        opt_days.append(is_opt)
+
+                    count_var = self.model.NewIntVar(0, len(self.dates), f"count_{person}_{opt}")
+                    self.model.Add(count_var == sum(opt_days))
+                    team_counts.append(count_var)
+
+                if team_counts:
+                    p_max_team = self.model.NewIntVar(0, len(self.dates), f"max_team_{person}")
+                    p_min_team = self.model.NewIntVar(0, len(self.dates), f"min_team_{person}")
+                    self.model.AddMaxEquality(p_max_team, team_counts)
+                    self.model.AddMinEquality(p_min_team, team_counts)
+
+                    person_team_variance = self.model.NewIntVar(0, len(self.dates), f"team_var_{person}")
+                    self.model.Add(person_team_variance == p_max_team - p_min_team)
+                    team_evenness_penalties.append(person_team_variance)
+
+        # ---------- Weekly team (only on optimise weekday idxs) ----------
         weeks_dict = {}
-        for idx, date_str in enumerate(self.dates):
-            d_obj = datetime.strptime(date_str, '%d/%m/%Y')
-            if not self.persons or idx not in self.team_vars.get(self.persons[0], {}):
-                continue
+        for idx in sorted(self.optimise_date_idxs):
+            d_obj = datetime.strptime(self.dates[idx], '%d/%m/%Y')
             monday_obj = d_obj - timedelta(days=d_obj.weekday())
             week_id = monday_obj.strftime('%d/%m/%Y')
             weeks_dict.setdefault(week_id, []).append(idx)
 
         nonexclusive_teams = {'leave'}
         exclusive_team_indices = [
-            i for i, name in enumerate(self.team_options) 
+            i for i, name in enumerate(self.team_options)
             if name not in nonexclusive_teams
         ]
 
@@ -592,7 +630,7 @@ class Roster:
                 person_week_indices = [idx for idx in week_indices if idx in self.team_vars.get(person, {})]
                 if not person_week_indices:
                     continue
-                
+
                 week_exclusive_team_flags = []
                 for t_idx in exclusive_team_indices:
                     t_assigned_vars = []
@@ -601,12 +639,12 @@ class Roster:
                         self.model.Add(self.team_vars[person][idx] == t_idx).OnlyEnforceIf(is_this_team)
                         self.model.Add(self.team_vars[person][idx] != t_idx).OnlyEnforceIf(is_this_team.Not())
                         t_assigned_vars.append(is_this_team)
-                    
+
                     safe_week_str = week_id.replace('/', '_')
                     team_used_this_week = self.model.NewBoolVar(f"used_team_{person}_{safe_week_str}_{t_idx}")
                     self.model.AddMaxEquality(team_used_this_week, t_assigned_vars)
                     week_exclusive_team_flags.append(team_used_this_week)
-                
+
                 sum_teams_var = self.model.NewIntVar(0, len(exclusive_team_indices), f"sum_teams_{person}_{week_id.replace('/', '_')}")
                 self.model.Add(sum_teams_var == sum(week_exclusive_team_flags))
 
@@ -614,10 +652,11 @@ class Roster:
                 self.model.Add(excess_team_var >= sum_teams_var - 1)
                 weekly_team_penalties.append(excess_team_var)
 
+        # ---------- Shittiness ----------
         shittiness_window_penalties = []
         staff_total_shittiness = []
         window_size = 14
-        
+
         if self.team_shittiness:
             team_shith_map = [self.team_shittiness.get(self.idx_to_team[i], 0) for i in range(len(self.team_options))]
             max_shith = max(team_shith_map) if team_shith_map else 0
@@ -628,7 +667,7 @@ class Roster:
                     person_team_vars = self.team_vars.get(person, {})
                     day_shittiness = {}
                     person_daily_shvars = []
-                    
+
                     for idx in range(len(self.dates)):
                         if idx in person_team_vars:
                             s_var = self.model.NewIntVar(0, max_shith, f"shittiness_{person}_{idx}")
@@ -639,7 +678,6 @@ class Roster:
                             day_shittiness[idx] = s_var
                         person_daily_shvars.append(s_var)
 
-                    # Total shittiness sum per person
                     person_total_shith = self.model.NewIntVar(0, max_possible_total_shith, f"total_shittiness_{person}")
                     self.model.Add(person_total_shith == sum(person_daily_shvars))
                     staff_total_shittiness.append(person_total_shith)
@@ -651,38 +689,21 @@ class Roster:
                             self.model.Add(window_sum == sum(window_vars))
                             shittiness_window_penalties.append(window_sum)
 
-        # Compute total shittiness disparity across staff members
-        max_total_shith = self.model.NewIntVar(0, len(self.dates) * 100, "max_total_shith")
-        min_total_shith = self.model.NewIntVar(0, len(self.dates) * 100, "min_total_shith")
         shittiness_disparity = self.model.NewIntVar(0, len(self.dates) * 100, "shittiness_disparity")
-
         if staff_total_shittiness:
+            max_total_shith = self.model.NewIntVar(0, len(self.dates) * 100, "max_total_shith")
+            min_total_shith = self.model.NewIntVar(0, len(self.dates) * 100, "min_total_shith")
             self.model.AddMaxEquality(max_total_shith, staff_total_shittiness)
             self.model.AddMinEquality(min_total_shith, staff_total_shittiness)
             self.model.Add(shittiness_disparity == max_total_shith - min_total_shith)
         else:
             self.model.Add(shittiness_disparity == 0)
 
-        # ==========================================
-        # DIMENSION INITIALIZATIONS FOR NORMALIZATION
-        # ==========================================
+        # ---------- Normalization ----------
         P = len(self.persons)
         D = len(self.dates)
-
-        months_dict_norm = {}
-        for idx, date_str in enumerate(self.dates):
-            d_obj = datetime.strptime(date_str, '%d/%m/%Y')
-            month_key = d_obj.strftime('%Y-%m')
-            months_dict_norm.setdefault(month_key, []).append(idx)
-        M = len(months_dict_norm)
-
-        weeks_dict_norm = {}
-        for idx, date_str in enumerate(self.dates):
-            d_obj = datetime.strptime(date_str, '%d/%m/%Y')
-            monday_obj = d_obj - timedelta(days=d_obj.weekday())
-            week_id = monday_obj.strftime('%d/%m/%Y')
-            weeks_dict_norm.setdefault(week_id, []).append(idx)
-        W = len(weeks_dict_norm)
+        M = len(months_dict)
+        W = len(weeks_dict)
 
         P_base, D_base, M_base, W_base = 11, 30, 1, 6
 
@@ -692,20 +713,17 @@ class Roster:
         scale_D  = (D_base * 1000) // max(1, D)
         scale_PW = (P_base * W_base * 1000) // max(1, P * W)
 
-        # ==========================================
-        # COMBINED OBJECTIVE WEIGHTS (Integer Scaled)
-        # ==========================================
         total_objective = (
-            sum(spread_penalties) * scale_PD * 1 +                  
-            sum(monthly_equity_penalties) * scale_P * 1 +          
-            sum(monthly_smoothing_penalties) * scale_PM * 1 +      
-            sum(largest_gaps) * scale_P * 2 +                      
-            wd_disparity * scale_D * 8 +                           
-            we_disparity * scale_D * 8 +                           
-            total_call_disparity * scale_D * 15 +                  
-            sum(team_evenness_penalties) * scale_P * 2 +           
-            sum(weekly_team_penalties) * scale_PW * 10 +           
-            sum(shittiness_window_penalties) * scale_PD * 4 +      
+            sum(spread_penalties) * scale_PD * 1 +
+            sum(monthly_equity_penalties) * scale_P * 1 +
+            sum(monthly_smoothing_penalties) * scale_PM * 1 +
+            sum(largest_gaps) * scale_P * 2 +
+            wd_disparity * scale_D * 8 +
+            we_disparity * scale_D * 8 +
+            total_call_disparity * scale_D * 15 +
+            sum(team_evenness_penalties) * scale_P * 2 +
+            sum(weekly_team_penalties) * scale_PW * 10 +
+            sum(shittiness_window_penalties) * scale_PD * 4 +
             shittiness_disparity * scale_D * 12
         )
         self.model.Minimize(total_objective)
@@ -728,4 +746,6 @@ class Roster:
 
         if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             return True
-        return False
+        else:
+            print(f"[Solver] status = {self.solver.StatusName(status)}")
+            return False
