@@ -210,8 +210,8 @@ def compute_availability(inp: RosterInputs, cfg: RosterConfig):
                 pre, post = cfg.leave_buffers
                 for off in range(-pre, post + 1):
                     night_off[p].add(d + timedelta(days=off))
-                if d.weekday() == 0:        # Monday leave blocks the weekend before
-                    night_off[p].update({d - 2 * ONE_DAY, d - ONE_DAY})
+                if d.weekday() == 0:        # Monday leave blocks the weekend + friday before 
+                    night_off[p].update({d - 3 * ONE_DAY, d - 2 * ONE_DAY, d - ONE_DAY})
                 elif d.weekday() == 4:      # Friday leave blocks the weekend after
                     night_off[p].update({d + ONE_DAY, d + 2 * ONE_DAY})
             else:
