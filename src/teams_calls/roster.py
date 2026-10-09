@@ -86,7 +86,7 @@ class Weights:
     one_team_per_week: int = 1000         # only used when cfg.one_team_per_week == 'soft'
     team_evenness: int = 2
     call_peak: int = 1                  # worst calls-in-7-days per person
-    call_max_gap: int = 2               # longest stretch without a call per person
+    call_max_gap: int = 80               # longest stretch without a call per person
     call_weekday_disparity: int = 8
     call_weekend_disparity: int = 8
     call_total_disparity: int = 15
@@ -106,7 +106,7 @@ class RosterConfig:
     one_team_per_week: str = "soft"     # 'hard' | 'soft' | 'off'
     evenness_excludes: tuple = (PS_COVER,)
     fairness_includes_history: bool = True
-    shittiness_window_days: int = 14
+    shittiness_window_days: int = 21
     max_solve_time_seconds: float = 10.0
     weights: Weights = field(default_factory=Weights)
 
