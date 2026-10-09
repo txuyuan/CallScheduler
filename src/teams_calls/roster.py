@@ -83,7 +83,7 @@ class TeamSpec:
 class Weights:
     """Every objective term, one weight each. Set 0 to disable a term."""
     manpower: int = 1                   # multiplier on the TeamSpec shortfall/surplus costs
-    one_team_per_week: int = 10         # only used when cfg.one_team_per_week == 'soft'
+    one_team_per_week: int = 1000         # only used when cfg.one_team_per_week == 'soft'
     team_evenness: int = 2
     call_peak: int = 1                  # worst calls-in-7-days per person
     call_max_gap: int = 2               # longest stretch without a call per person
